@@ -13,11 +13,13 @@ import com.example.plannermvp.data.ScheduleStore
 
 @Composable
 fun SummaryScreen(
-    onGoPlan: () -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onGoPlan: () -> Unit
 ) {
     val blocks = ScheduleStore.todayBlocks
     val total = blocks.size
+    val reviewed = blocks.count { it.feedback != null }
+
     val good = blocks.count { it.feedback == Feedback.GOOD }
     val okay = blocks.count { it.feedback == Feedback.OKAY }
     val bad = blocks.count { it.feedback == Feedback.BAD }
@@ -27,14 +29,14 @@ fun SummaryScreen(
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onBack) { Text("뒤로") }
-            Button(onClick = onGoPlan) { Text("다음 일정 계획하기") }
+            Button(onClick = onGoPlan) { Text("내일 계획 세우기") }
         }
 
-        Text("하루 요약")
-        Text("총 일정: $total")
-        Text("GOOD: $good / OKAY: $okay / BAD: $bad / FAIL: $fail / NONE: $none")
+        Text("오늘 요약")
+        Text("일정 ${total}개 / 피드백 ${reviewed}개 완료")
+        Text("GOOD $good / OKAY $okay / BAD $bad / FAIL $fail / NONE $none")
 
-        Text("오늘 블록 목록")
+        Text("일정 목록")
         blocks.sortedBy { it.startMinute }.forEach { b ->
             val fb = b.feedback?.name ?: "NONE"
             Text("- ${b.title} : $fb")

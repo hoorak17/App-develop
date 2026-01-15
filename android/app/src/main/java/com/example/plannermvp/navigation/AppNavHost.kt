@@ -7,6 +7,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.plannermvp.feature.home.HomeScreen
 import com.example.plannermvp.feature.plan.PlanScreen
+import com.example.plannermvp.feature.summary.SummaryScreen
 
 @Composable
 fun AppNavHost(modifier: Modifier = Modifier) {
@@ -19,6 +20,12 @@ fun AppNavHost(modifier: Modifier = Modifier) {
     ) {
         composable(Route.Home.path) {
             HomeScreen(
+                onGoSummary = { navController.navigate(Route.Summary.path) }
+            )
+        }
+        composable(Route.Summary.path) {
+            SummaryScreen(
+                onBack = { navController.popBackStack() },
                 onGoPlan = { navController.navigate(Route.Plan.path) }
             )
         }
@@ -29,7 +36,8 @@ fun AppNavHost(modifier: Modifier = Modifier) {
                         popUpTo(Route.Home.path) { inclusive = true }
                         launchSingleTop = true
                     }
-                }
+                },
+                onBack = { navController.popBackStack() }
             )
         }
     }

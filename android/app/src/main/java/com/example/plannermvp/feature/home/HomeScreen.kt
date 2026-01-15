@@ -9,17 +9,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -32,86 +28,91 @@ import com.example.plannermvp.data.Feedback
 import com.example.plannermvp.data.ScheduleStore
 import com.example.plannermvp.data.TimeBlock
 import com.example.plannermvp.data.toHHMM
+import com.example.plannermvp.feature.plan.WheelTimeDialog
 
-private const val SLOT_MIN = 30 // 30분 단위
+private const val GAP_UNIT_MIN = 60
+
+sealed interface TimelineItem {
+    data class Block(val block: TimeBlock) : TimelineItem
+    data class Gap(val start: Int, val end: Int) : TimelineItem
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(onGoPlan: () -> Unit) {
+fun HomeScreen(
+    onGoSummary: () -> Unit
+) {
     // 피드백 시트
     var selectedBlock by remember { mutableStateOf<TimeBlock?>(null) }
     var showFeedbackSheet by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    // 빈 시간 클릭 → 일정 추가 다이얼
+    // 빈 시간 클릭 → 일정 추가 다이얼(휠)
     var showAddDialog by remember { mutableStateOf(false) }
-    var addDefaultStart by remember { mutableStateOf(9 * 60) } // 클릭 슬롯 시작
-    var addDefaultEnd by remember { mutableStateOf(10 * 60) }
+    var addStart by remember { mutableStateOf(9 * 60) }
+    var addEnd by remember { mutableStateOf(10 * 60) }
 
-    // 요약
-    val total = ScheduleStore.todayBlocks.size
-    val reviewed = ScheduleStore.todayBlocks.count { it.feedback != null }
+    val blocks = ScheduleStore.todayBlocks.sortedBy { it.startMinute }
+    val total = blocks.size
+    val reviewed = blocks.count { it.feedback != null }
+
+    val items = remember(blocks) { buildTimelineItems(blocks) }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Card(modifier = Modifier.weight(1f)) {
                 Column {
-                    Text("오늘 요약")
+                    Text("홈 (오늘)")
                     Text("일정 ${total}개 / 피드백 ${reviewed}개")
                 }
             }
-            Button(onClick = onGoPlan) { Text("내일 계획") }
+            Button(onClick = onGoSummary) { Text("오늘 요약") }
         }
 
-        Text("오늘 타임라인 (빈 칸 클릭 → 일정 추가)")
-
-        val slots = remember { buildSlots() }
-        val blocks = ScheduleStore.todayBlocks.sortedBy { it.startMinute }
+        Text("타임라인 (블록=1칸, 빈 시간=1시간 칸)")
 
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(slots) { slotStart ->
-                val slotEnd = (slotStart + SLOT_MIN).coerceAtMost(24 * 60)
-                val occupying = blocks.firstOrNull { b ->
-                    // 슬롯이 블록 범위에 "겹치면" 점유로 간주
-                    slotStart < b.endMinute && slotEnd > b.startMinute
-                }
-
-                if (occupying == null) {
-                    EmptySlotRow(
-                        startMinute = slotStart,
-                        endMinute = slotEnd,
-                        onClick = {
-                            addDefaultStart = slotStart
-                            addDefaultEnd = (slotStart + 60).coerceAtMost(24 * 60) // 기본 1시간
-                            showAddDialog = true
-                        }
-                    )
-                } else {
-                    BlockRow(
-                        block = occupying,
-                        onClick = {
-                            selectedBlock = occupying
-                            showFeedbackSheet = true
-                        }
-                    )
+            items(items) { item ->
+                when (item) {
+                    is TimelineItem.Block -> {
+                        BlockCard(
+                            block = item.block,
+                            onClick = {
+                                selectedBlock = item.block
+                                showFeedbackSheet = true
+                            }
+                        )
+                    }
+                    is TimelineItem.Gap -> {
+                        GapCard(
+                            start = item.start,
+                            end = item.end,
+                            onClick = {
+                                addStart = item.start
+                                addEnd = (item.start + 60).coerceAtMost(item.end)
+                                showAddDialog = true
+                            }
+                        )
+                    }
                 }
             }
         }
     }
 
-    // 빈칸 추가 다이얼
+    // 빈 시간 일정 추가(휠 타임피커)
     if (showAddDialog) {
-        AddOrEditBlockDialog(
+        WheelTimeDialog(
+            title = "일정 추가",
             titleDefault = "",
-            startDefaultMinute = addDefaultStart,
-            endDefaultMinute = addDefaultEnd,
+            startDefaultMinute = addStart,
+            endDefaultMinute = addEnd,
             onDismiss = { showAddDialog = false },
-            onSave = { title, startMin, endMin ->
+            onSave = { t, s, e ->
                 ScheduleStore.addTodayBlock(
-                    title = title,
-                    startMinute = startMin,
-                    endMinute = endMin,
-                    category = guessCategory(title)
+                    title = t,
+                    startMinute = s,
+                    endMinute = e,
+                    category = guessCategory(t)
                 )
                 showAddDialog = false
             }
@@ -124,7 +125,7 @@ fun HomeScreen(onGoPlan: () -> Unit) {
             onDismissRequest = { showFeedbackSheet = false },
             sheetState = sheetState
         ) {
-            FeedbackSheetContent(
+            FeedbackSheet(
                 block = selectedBlock!!,
                 onPick = { fb ->
                     ScheduleStore.updateTodayFeedback(selectedBlock!!.id, fb)
@@ -141,24 +142,9 @@ fun HomeScreen(onGoPlan: () -> Unit) {
 }
 
 @Composable
-private fun EmptySlotRow(startMinute: Int, endMinute: Int, onClick: () -> Unit) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-    ) {
-        Column {
-            Text("${startMinute.toHHMM()} - ${endMinute.toHHMM()}")
-            Text("빈 시간 (눌러서 일정 추가)")
-        }
-    }
-}
-
-@Composable
-private fun BlockRow(block: TimeBlock, onClick: () -> Unit) {
+private fun BlockCard(block: TimeBlock, onClick: () -> Unit) {
     val time = "${block.startMinute.toHHMM()} - ${block.endMinute.toHHMM()}"
     val fb = block.feedback?.name ?: "NONE"
-
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -172,65 +158,22 @@ private fun BlockRow(block: TimeBlock, onClick: () -> Unit) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AddOrEditBlockDialog(
-    titleDefault: String,
-    startDefaultMinute: Int,
-    endDefaultMinute: Int,
-    onDismiss: () -> Unit,
-    onSave: (title: String, startMin: Int, endMin: Int) -> Unit
-) {
-    var title by remember { mutableStateOf(titleDefault) }
-
-    // TimePicker는 hour/minute를 상태로 가진다
-    val startState = rememberTimePickerState(
-        initialHour = startDefaultMinute / 60,
-        initialMinute = startDefaultMinute % 60,
-        is24Hour = true
-    )
-    val endState = rememberTimePickerState(
-        initialHour = endDefaultMinute / 60,
-        initialMinute = endDefaultMinute % 60,
-        is24Hour = true
-    )
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("일정 추가") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    label = { Text("일정 이름") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Text("시작 시간")
-                TimePicker(state = startState)
-
-                Text("종료 시간")
-                TimePicker(state = endState)
-            }
-        },
-        confirmButton = {
-            Button(onClick = {
-                val s = startState.hour * 60 + startState.minute
-                val e = endState.hour * 60 + endState.minute
-                if (title.isBlank()) return@Button
-                if (e <= s) return@Button
-                onSave(title.trim(), s, e)
-            }) { Text("저장") }
-        },
-        dismissButton = {
-            OutlinedButton(onClick = onDismiss) { Text("취소") }
+private fun GapCard(start: Int, end: Int, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+    ) {
+        Column {
+            Text("${start.toHHMM()} - ${end.toHHMM()}")
+            Text("빈 시간 (눌러서 일정 추가)")
         }
-    )
+    }
 }
 
 @Composable
-private fun FeedbackSheetContent(
+private fun FeedbackSheet(
     block: TimeBlock,
     onPick: (Feedback) -> Unit,
     onClear: () -> Unit
@@ -254,14 +197,34 @@ private fun FeedbackSheetContent(
     }
 }
 
-private fun buildSlots(): List<Int> {
-    val list = mutableListOf<Int>()
-    var t = 0
-    while (t < 24 * 60) {
-        list.add(t)
-        t += SLOT_MIN
+private fun buildTimelineItems(blocks: List<TimeBlock>): List<TimelineItem> {
+    val sorted = blocks.sortedBy { it.startMinute }
+    val result = mutableListOf<TimelineItem>()
+
+    var cursor = 0
+    for (b in sorted) {
+        // 블록 앞 갭
+        if (b.startMinute > cursor) {
+            addGaps(result, cursor, b.startMinute)
+        }
+        // 블록은 1칸
+        result.add(TimelineItem.Block(b))
+        cursor = maxOf(cursor, b.endMinute)
     }
-    return list
+    // 끝 갭
+    if (cursor < 24 * 60) {
+        addGaps(result, cursor, 24 * 60)
+    }
+    return result
+}
+
+private fun addGaps(out: MutableList<TimelineItem>, start: Int, end: Int) {
+    var s = start
+    while (s < end) {
+        val e = minOf(s + GAP_UNIT_MIN, end)
+        out.add(TimelineItem.Gap(s, e))
+        s = e
+    }
 }
 
 private fun guessCategory(title: String): Category {
