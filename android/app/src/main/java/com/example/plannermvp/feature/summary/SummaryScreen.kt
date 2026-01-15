@@ -8,23 +8,17 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.unit.dp
-import com.example.plannermvp.data.Feedback
 import com.example.plannermvp.data.ScheduleStore
+import com.example.plannermvp.data.toHHMM
 
 @Composable
 fun SummaryScreen(
     onBack: () -> Unit,
     onGoPlan: () -> Unit
 ) {
-    val blocks = ScheduleStore.todayBlocks
+    val blocks = ScheduleStore.todayBlocks.sortedBy { it.startMinute }
     val total = blocks.size
-    val reviewed = blocks.count { it.feedback != null }
-
-    val good = blocks.count { it.feedback == Feedback.GOOD }
-    val okay = blocks.count { it.feedback == Feedback.OKAY }
-    val bad = blocks.count { it.feedback == Feedback.BAD }
-    val fail = blocks.count { it.feedback == Feedback.FAIL }
-    val none = blocks.count { it.feedback == null }
+    val reviewed = blocks.count { it.feedbackTags.isNotEmpty() }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -33,13 +27,13 @@ fun SummaryScreen(
         }
 
         Text("오늘 요약")
-        Text("일정 ${total}개 / 피드백 ${reviewed}개 완료")
-        Text("GOOD $good / OKAY $okay / BAD $bad / FAIL $fail / NONE $none")
+        Text("일정 ${total}개 / 피드백 입력 ${reviewed}개")
 
-        Text("일정 목록")
-        blocks.sortedBy { it.startMinute }.forEach { b ->
-            val fb = b.feedback?.name ?: "NONE"
-            Text("- ${b.title} : $fb")
+        Text("일정별 피드백")
+        blocks.forEach { b ->
+            val time = "${b.startMinute.toHHMM()}-${b.endMinute.toHHMM()}"
+            val tags = if (b.feedbackTags.isEmpty()) "NONE" else b.feedbackTags.joinToString(", ")
+            Text("- ${b.title} ($time) : $tags")
         }
     }
 }
