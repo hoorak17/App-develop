@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -27,11 +28,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 
-/**
- * 공용 휠(스크롤) 시간 설정 다이얼
- * - 원형 시계 다이얼이 아니라 "위아래 휠" 방식(NumberPicker)
- * - 화면 깨짐 방지: Dialog + heightIn + verticalScroll
- */
 @Composable
 fun WheelTimeDialog(
     title: String,
@@ -49,13 +45,26 @@ fun WheelTimeDialog(
     var endHour by remember { mutableStateOf(endDefaultMinute / 60) }
     var endMin by remember { mutableStateOf(endDefaultMinute % 60) }
 
+    val s = startHour * 60 + startMin
+    val e = endHour * 60 + endMin
+
+    val nameOk = name.trim().isNotEmpty()
+    val timeOk = e > s
+
+    val errorText = when {
+        !nameOk -> "일정 이름을 입력하세요."
+        !timeOk -> "종료 시간은 시작 시간보다 늦어야 합니다."
+        else -> ""
+    }
+
     Dialog(onDismissRequest = onDismiss) {
         Surface {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 640.dp)
-                    .verticalScroll(rememberScrollState()),
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(title)
@@ -64,7 +73,8 @@ fun WheelTimeDialog(
                     value = name,
                     onValueChange = { name = it },
                     label = { Text("일정 이름") },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
                 )
 
                 Text("시작")
@@ -83,19 +93,20 @@ fun WheelTimeDialog(
                     onMinuteChanged = { endMin = it }
                 )
 
+                if (errorText.isNotBlank()) {
+                    Text(errorText)
+                }
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     OutlinedButton(onClick = onDismiss) { Text("취소") }
-                    Button(onClick = {
-                        val s = startHour * 60 + startMin
-                        val e = endHour * 60 + endMin
-                        if (name.isBlank()) return@Button
-                        if (e <= s) return@Button
-                        onSave(name.trim(), s, e)
-                    }) { Text("저장") }
+                    Button(
+                        enabled = nameOk && timeOk,
+                        onClick = { onSave(name.trim(), s, e) }
+                    ) { Text("저장") }
                 }
             }
         }
@@ -128,7 +139,7 @@ private fun WheelTimePicker(
                     minValue = 0
                     maxValue = 59
                     value = minute
-                    setFormatter { v -> "%02d".format(v) } // ✅ formatter 에러 해결
+                    setFormatter { v -> "%02d".format(v) }
                     setOnValueChangedListener { _, _, newVal -> onMinuteChanged(newVal) }
                 }
 
