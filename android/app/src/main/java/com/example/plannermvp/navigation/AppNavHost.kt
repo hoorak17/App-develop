@@ -7,8 +7,6 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.plannermvp.feature.home.HomeScreen
 import com.example.plannermvp.feature.plan.PlanScreen
-import com.example.plannermvp.feature.summary.SummaryScreen
-import com.example.plannermvp.feature.today.TodayScreen
 
 @Composable
 fun AppNavHost(modifier: Modifier = Modifier) {
@@ -21,14 +19,6 @@ fun AppNavHost(modifier: Modifier = Modifier) {
     ) {
         composable(Route.Home.path) {
             HomeScreen(
-                onGoToday = { navController.navigate(Route.Today.path) },
-                onGoPlan = { navController.navigate(Route.Plan.path) },
-                onGoSummary = { navController.navigate(Route.Summary.path) }
-            )
-        }
-        composable(Route.Today.path) {
-            TodayScreen(
-                onBack = { navController.popBackStack() },
                 onGoPlan = { navController.navigate(Route.Plan.path) }
             )
         }
@@ -40,12 +30,6 @@ fun AppNavHost(modifier: Modifier = Modifier) {
                         launchSingleTop = true
                     }
                 }
-            )
-        }
-        composable(Route.Summary.path) {
-            SummaryScreen(
-                onGoPlan = { navController.navigate(Route.Plan.path) },
-                onBack = { navController.popBackStack() }
             )
         }
     }

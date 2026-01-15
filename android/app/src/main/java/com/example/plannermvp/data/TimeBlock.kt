@@ -9,13 +9,8 @@ data class TimeBlock(
     val feedback: Feedback? = null
 )
 
-enum class Category {
-    SLEEP, STUDY, EXERCISE, ETC
-}
-
-enum class Feedback {
-    GOOD, OKAY, BAD, FAIL
-}
+enum class Category { SLEEP, STUDY, EXERCISE, ETC }
+enum class Feedback { GOOD, OKAY, BAD, FAIL }
 
 fun Int.toHHMM(): String {
     val h = this / 60
