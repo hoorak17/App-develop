@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.OutlinedButton
@@ -19,7 +18,7 @@ import androidx.compose.ui.unit.dp
 import com.example.plannermvp.data.Category
 import com.example.plannermvp.data.ScheduleStore
 import com.example.plannermvp.data.TimeBlock
-import com.example.plannermvp.data.toHHMM
+import com.example.plannermvp.data.formatRange
 
 @Composable
 fun PlanScreen(
@@ -38,9 +37,7 @@ fun PlanScreen(
     val yesterday = ScheduleStore.yesterdayBlocks.toList()
     val tomorrow = ScheduleStore.tomorrowBlocks.sortedBy { it.startMinute }
 
-    Column(
-        modifier = Modifier.fillMaxSize()
-    ) {
+    Column(modifier = Modifier.fillMaxSize()) {
         // ✅ 스크롤 영역
         LazyColumn(
             modifier = Modifier
@@ -70,7 +67,6 @@ fun PlanScreen(
                             yesterday.forEach { b ->
                                 OutlinedButton(
                                     onClick = {
-                                        // 추가 다이얼(시간/이름 수정 가능)
                                         editingId = null
                                         dialogTitle = b.title
                                         dialogStart = b.startMinute
@@ -80,7 +76,7 @@ fun PlanScreen(
                                     },
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Text("${b.title}  ${b.startMinute.toHHMM()}-${b.endMinute.toHHMM()}")
+                                    Text("${b.title}  ${formatRange(b.startMinute, b.endMinute)}")
                                 }
                             }
                         }
@@ -131,11 +127,10 @@ fun PlanScreen(
                 }
             }
 
-            // ✅ 하단 버튼 영역과 겹치지 않도록 여백
             item { Text("") }
         }
 
-        // ✅ 하단 고정 버튼(항상 보임)
+        // ✅ 하단 고정 버튼
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -180,14 +175,13 @@ private fun TomorrowRow(
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
-    val time = "${block.startMinute.toHHMM()}-${block.endMinute.toHHMM()}"
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onEdit),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Text("• ${block.title}  $time", modifier = Modifier.weight(1f))
+        Text("• ${block.title}  ${formatRange(block.startMinute, block.endMinute)}", modifier = Modifier.weight(1f))
         OutlinedButton(onClick = onDelete) { Text("삭제") }
     }
 }

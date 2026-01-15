@@ -28,6 +28,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 
+private const val DAY_MIN = 24 * 60
+
 @Composable
 fun WheelTimeDialog(
     title: String,
@@ -39,21 +41,34 @@ fun WheelTimeDialog(
 ) {
     var name by remember { mutableStateOf(titleDefault) }
 
-    var startHour by remember { mutableStateOf(startDefaultMinute / 60) }
-    var startMin by remember { mutableStateOf(startDefaultMinute % 60) }
+    // 기본값은 "시각"만 보여주도록 0~1439로 정규화
+    var startHour by remember { mutableStateOf(((startDefaultMinute % DAY_MIN) + DAY_MIN) % DAY_MIN / 60) }
+    var startMin by remember { mutableStateOf(((startDefaultMinute % DAY_MIN) + DAY_MIN) % DAY_MIN % 60) }
 
-    var endHour by remember { mutableStateOf(endDefaultMinute / 60) }
-    var endMin by remember { mutableStateOf(endDefaultMinute % 60) }
+    var endHour by remember { mutableStateOf(((endDefaultMinute % DAY_MIN) + DAY_MIN) % DAY_MIN / 60) }
+    var endMin by remember { mutableStateOf(((endDefaultMinute % DAY_MIN) + DAY_MIN) % DAY_MIN % 60) }
 
-    val s = startHour * 60 + startMin
-    val e = endHour * 60 + endMin
+    val rawStart = startHour * 60 + startMin
+    val rawEnd = endHour * 60 + endMin
 
     val nameOk = name.trim().isNotEmpty()
-    val timeOk = e > s
+
+    // ✅ 자정 넘김 처리: 종료가 시작보다 이르면 "다음날 종료"로 자동 해석
+    val computedEnd = when {
+        rawEnd == rawStart -> rawEnd // 24시간 오해 방지 위해 아래에서 막음
+        rawEnd < rawStart -> rawEnd + DAY_MIN
+        else -> rawEnd
+    }
+
+    val timeOk = computedEnd > rawStart && rawEnd != rawStart
+    val crossesMidnight = rawEnd < rawStart && rawEnd != rawStart
+
+    val hint = if (crossesMidnight) "종료 시간이 시작보다 이르면 다음날 종료(+1일)로 처리됩니다." else ""
 
     val errorText = when {
         !nameOk -> "일정 이름을 입력하세요."
-        !timeOk -> "종료 시간은 시작 시간보다 늦어야 합니다."
+        rawEnd == rawStart -> "시작과 종료가 같으면 저장할 수 없습니다."
+        computedEnd <= rawStart -> "종료 시간은 시작 시간보다 늦어야 합니다."
         else -> ""
     }
 
@@ -62,7 +77,7 @@ fun WheelTimeDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 640.dp)
+                    .heightIn(max = 680.dp)
                     .verticalScroll(rememberScrollState())
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -93,9 +108,8 @@ fun WheelTimeDialog(
                     onMinuteChanged = { endMin = it }
                 )
 
-                if (errorText.isNotBlank()) {
-                    Text(errorText)
-                }
+                if (hint.isNotBlank()) Text(hint)
+                if (errorText.isNotBlank()) Text(errorText)
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -105,7 +119,9 @@ fun WheelTimeDialog(
                     OutlinedButton(onClick = onDismiss) { Text("취소") }
                     Button(
                         enabled = nameOk && timeOk,
-                        onClick = { onSave(name.trim(), s, e) }
+                        onClick = {
+                            onSave(name.trim(), rawStart, computedEnd)
+                        }
                     ) { Text("저장") }
                 }
             }
