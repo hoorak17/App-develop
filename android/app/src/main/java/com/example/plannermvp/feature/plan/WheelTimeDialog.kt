@@ -16,11 +16,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -37,35 +33,44 @@ fun WheelTimeDialog(
     startDefaultMinute: Int,
     endDefaultMinute: Int,
     onDismiss: () -> Unit,
-    onSave: (title: String, startMin: Int, endMin: Int) -> Unit
+    /**
+     * 저장을 실제로 수행하고 결과를 반환해야 함.
+     * - true: 저장 성공(다이얼 닫기)
+     * - false: 저장 실패(이유는 호출자가 보여주기 위해 errorMessage에 넣거나, 아래 default 메시지 사용)
+     */
+    onTrySave: (title: String, startMin: Int, endMin: Int) -> Boolean,
+    /**
+     * 겹침 등 외부 검증 실패 시, 다이얼 안에 표시할 메시지(선택)
+     */
+    externalErrorMessage: String? = null
 ) {
     var name by remember { mutableStateOf(titleDefault) }
 
-    // 기본값은 "시각"만 보여주도록 0~1439로 정규화
     var startHour by remember { mutableStateOf(((startDefaultMinute % DAY_MIN) + DAY_MIN) % DAY_MIN / 60) }
     var startMin by remember { mutableStateOf(((startDefaultMinute % DAY_MIN) + DAY_MIN) % DAY_MIN % 60) }
 
     var endHour by remember { mutableStateOf(((endDefaultMinute % DAY_MIN) + DAY_MIN) % DAY_MIN / 60) }
     var endMin by remember { mutableStateOf(((endDefaultMinute % DAY_MIN) + DAY_MIN) % DAY_MIN % 60) }
 
+    // 다이얼 내부 에러(시간/이름/겹침)
+    var localError by remember { mutableStateOf("") }
+
     val rawStart = startHour * 60 + startMin
     val rawEnd = endHour * 60 + endMin
 
     val nameOk = name.trim().isNotEmpty()
 
-    // ✅ 자정 넘김 처리: 종료가 시작보다 이르면 "다음날 종료"로 자동 해석
+    // 자정 넘김 처리
     val computedEnd = when {
-        rawEnd == rawStart -> rawEnd // 24시간 오해 방지 위해 아래에서 막음
+        rawEnd == rawStart -> rawEnd
         rawEnd < rawStart -> rawEnd + DAY_MIN
         else -> rawEnd
     }
 
-    val timeOk = computedEnd > rawStart && rawEnd != rawStart
     val crossesMidnight = rawEnd < rawStart && rawEnd != rawStart
-
     val hint = if (crossesMidnight) "종료 시간이 시작보다 이르면 다음날 종료(+1일)로 처리됩니다." else ""
 
-    val errorText = when {
+    val baseError = when {
         !nameOk -> "일정 이름을 입력하세요."
         rawEnd == rawStart -> "시작과 종료가 같으면 저장할 수 없습니다."
         computedEnd <= rawStart -> "종료 시간은 시작 시간보다 늦어야 합니다."
@@ -86,7 +91,10 @@ fun WheelTimeDialog(
 
                 OutlinedTextField(
                     value = name,
-                    onValueChange = { name = it },
+                    onValueChange = {
+                        name = it
+                        localError = ""
+                    },
                     label = { Text("일정 이름") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
@@ -96,20 +104,28 @@ fun WheelTimeDialog(
                 WheelTimePicker(
                     hour = startHour,
                     minute = startMin,
-                    onHourChanged = { startHour = it },
-                    onMinuteChanged = { startMin = it }
+                    onHourChanged = { startHour = it; localError = "" },
+                    onMinuteChanged = { startMin = it; localError = "" }
                 )
 
                 Text("종료")
                 WheelTimePicker(
                     hour = endHour,
                     minute = endMin,
-                    onHourChanged = { endHour = it },
-                    onMinuteChanged = { endMin = it }
+                    onHourChanged = { endHour = it; localError = "" },
+                    onMinuteChanged = { endMin = it; localError = "" }
                 )
 
                 if (hint.isNotBlank()) Text(hint)
-                if (errorText.isNotBlank()) Text(errorText)
+
+                // ✅ 에러 표시 우선순위: baseError -> localError -> externalErrorMessage
+                val showError = when {
+                    baseError.isNotBlank() -> baseError
+                    localError.isNotBlank() -> localError
+                    !externalErrorMessage.isNullOrBlank() -> externalErrorMessage
+                    else -> ""
+                }
+                if (showError.isNotBlank()) Text(showError)
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -118,9 +134,16 @@ fun WheelTimeDialog(
                 ) {
                     OutlinedButton(onClick = onDismiss) { Text("취소") }
                     Button(
-                        enabled = nameOk && timeOk,
+                        enabled = baseError.isBlank(),
                         onClick = {
-                            onSave(name.trim(), rawStart, computedEnd)
+                            if (baseError.isNotBlank()) return@Button
+                            val ok = onTrySave(name.trim(), rawStart, computedEnd)
+                            if (!ok) {
+                                // 호출자가 false를 준 경우 = 대부분 겹침
+                                localError = "저장 실패: 다른 일정과 시간이 겹칩니다."
+                            } else {
+                                onDismiss() // 성공이면 닫기
+                            }
                         }
                     ) { Text("저장") }
                 }

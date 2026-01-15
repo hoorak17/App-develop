@@ -8,7 +8,6 @@ object ScheduleStore {
     val yesterdayBlocks = mutableStateListOf<TimeBlock>()
     val tomorrowBlocks = mutableStateListOf<TimeBlock>()
 
-    // 재진입(버튼 연타 등) 방지
     private var isAdvancing: Boolean = false
     private var seededOnce: Boolean = false
 
@@ -20,7 +19,7 @@ object ScheduleStore {
         if (seededOnce) return
         seededOnce = true
 
-        // ✅ 앱 처음 켜면 기본적으로 "수면/운동/공부"가 오늘 계획에 존재
+        // ✅ 앱 실행 시 기본 일정: 수면/공부/운동
         if (todayBlocks.isEmpty()) {
             todayBlocks.add(TimeBlock(title = "수면", startMinute = 0, endMinute = 8 * 60, category = Category.SLEEP))
             todayBlocks.add(TimeBlock(title = "공부", startMinute = 10 * 60, endMinute = 12 * 60, category = Category.STUDY))
@@ -28,47 +27,75 @@ object ScheduleStore {
         }
     }
 
-    /**
-     * ✅ 요약 → 계획 화면으로 넘어갈 때 호출
-     * "어제 일정" = 방금까지의 "오늘 일정" 스냅샷으로 만든다.
-     * (즉 1일차 요약 → 2일차 계획에서 1일차가 어제로 보이게)
-     */
+    // ---------------------------
+    // Planning flow
+    // ---------------------------
     fun preparePlanningNextDay() {
+        // "어제" = 방금까지의 "오늘" 스냅샷
         yesterdayBlocks.clear()
         yesterdayBlocks.addAll(todayBlocks.map { it.copy() })
 
-        // 계획 화면 들어갈 때, 내일 계획이 남아있으면 헷갈리므로 비워두는 게 안전
+        // 계획 화면 진입 시 내일 계획은 새로 작성(원하면 유지로 바꿀 수 있음)
         tomorrowBlocks.clear()
     }
 
-    // --- Tomorrow CRUD ---
-    fun addTomorrowBlock(title: String, startMinute: Int, endMinute: Int, category: Category) {
-        tomorrowBlocks.add(TimeBlock(title = title, startMinute = startMinute, endMinute = endMinute, category = category))
-    }
+    fun finalizeTomorrowToToday() {
+        if (isAdvancing) return
+        isAdvancing = true
+        try {
+            // yesterday <- today
+            yesterdayBlocks.clear()
+            yesterdayBlocks.addAll(todayBlocks.map { it.copy() })
 
-    fun updateTomorrowBlock(id: String, title: String, startMinute: Int, endMinute: Int, category: Category) {
-        val idx = tomorrowBlocks.indexOfFirst { it.id == id }
-        if (idx >= 0) {
-            val old = tomorrowBlocks[idx]
-            tomorrowBlocks[idx] = old.copy(title = title, startMinute = startMinute, endMinute = endMinute, category = category)
+            // today <- tomorrow (피드백 초기화)
+            todayBlocks.clear()
+            todayBlocks.addAll(tomorrowBlocks.map { it.copy(feedbackTags = emptySet(), feedbackMemo = "") })
+
+            tomorrowBlocks.clear()
+        } finally {
+            isAdvancing = false
         }
     }
 
-    fun deleteTomorrowBlock(id: String) {
-        tomorrowBlocks.removeAll { it.id == id }
+    // ---------------------------
+    // Overlap validation
+    // ---------------------------
+    private fun overlaps(aStart: Int, aEnd: Int, bStart: Int, bEnd: Int): Boolean {
+        // [start, end) interval overlap
+        return maxOf(aStart, bStart) < minOf(aEnd, bEnd)
     }
 
-    // --- Today CRUD (홈에서 추가/수정/삭제할 때 사용) ---
-    fun addTodayBlock(title: String, startMinute: Int, endMinute: Int, category: Category) {
+    private fun canPlace(
+        list: List<TimeBlock>,
+        ignoreId: String?,
+        startMinute: Int,
+        endMinute: Int
+    ): Boolean {
+        if (endMinute <= startMinute) return false
+        for (b in list) {
+            if (ignoreId != null && b.id == ignoreId) continue
+            if (overlaps(startMinute, endMinute, b.startMinute, b.endMinute)) return false
+        }
+        return true
+    }
+
+    // ---------------------------
+    // Today CRUD (겹치면 false)
+    // ---------------------------
+    fun addTodayBlock(title: String, startMinute: Int, endMinute: Int, category: Category): Boolean {
+        if (!canPlace(todayBlocks, ignoreId = null, startMinute = startMinute, endMinute = endMinute)) return false
         todayBlocks.add(TimeBlock(title = title, startMinute = startMinute, endMinute = endMinute, category = category))
+        return true
     }
 
-    fun updateTodayBlock(id: String, title: String, startMinute: Int, endMinute: Int, category: Category) {
+    fun updateTodayBlock(id: String, title: String, startMinute: Int, endMinute: Int, category: Category): Boolean {
         val idx = todayBlocks.indexOfFirst { it.id == id }
-        if (idx >= 0) {
-            val old = todayBlocks[idx]
-            todayBlocks[idx] = old.copy(title = title, startMinute = startMinute, endMinute = endMinute, category = category)
-        }
+        if (idx < 0) return false
+        if (!canPlace(todayBlocks, ignoreId = id, startMinute = startMinute, endMinute = endMinute)) return false
+
+        val old = todayBlocks[idx]
+        todayBlocks[idx] = old.copy(title = title, startMinute = startMinute, endMinute = endMinute, category = category)
+        return true
     }
 
     fun deleteTodayBlock(id: String) {
@@ -91,30 +118,27 @@ object ScheduleStore {
         }
     }
 
-    /**
-     * ✅ 계획 화면에서 "완료하기" 눌렀을 때만 호출
-     * 내일 계획(tomorrowBlocks)을 오늘(todayBlocks)로 확정한다.
-     *
-     * - yesterday는 이미 preparePlanningNextDay로 잡혀있지만,
-     *   안전하게 다시 today 스냅샷을 남겨두어도 무방
-     */
-    fun finalizeTomorrowToToday() {
-        if (isAdvancing) return
-        isAdvancing = true
-        try {
-            // yesterday <- today (스냅샷)
-            yesterdayBlocks.clear()
-            yesterdayBlocks.addAll(todayBlocks.map { it.copy() })
+    // ---------------------------
+    // Tomorrow CRUD (겹치면 false)
+    // ---------------------------
+    fun addTomorrowBlock(title: String, startMinute: Int, endMinute: Int, category: Category): Boolean {
+        if (!canPlace(tomorrowBlocks, ignoreId = null, startMinute = startMinute, endMinute = endMinute)) return false
+        tomorrowBlocks.add(TimeBlock(title = title, startMinute = startMinute, endMinute = endMinute, category = category))
+        return true
+    }
 
-            // today <- tomorrow (피드백 초기화)
-            todayBlocks.clear()
-            todayBlocks.addAll(tomorrowBlocks.map { it.copy(feedbackTags = emptySet(), feedbackMemo = "") })
+    fun updateTomorrowBlock(id: String, title: String, startMinute: Int, endMinute: Int, category: Category): Boolean {
+        val idx = tomorrowBlocks.indexOfFirst { it.id == id }
+        if (idx < 0) return false
+        if (!canPlace(tomorrowBlocks, ignoreId = id, startMinute = startMinute, endMinute = endMinute)) return false
 
-            // tomorrow clear
-            tomorrowBlocks.clear()
-        } finally {
-            isAdvancing = false
-        }
+        val old = tomorrowBlocks[idx]
+        tomorrowBlocks[idx] = old.copy(title = title, startMinute = startMinute, endMinute = endMinute, category = category)
+        return true
+    }
+
+    fun deleteTomorrowBlock(id: String) {
+        tomorrowBlocks.removeAll { it.id == id }
     }
 
     fun feedbackOptionsFor(category: Category): List<String> {

@@ -1,6 +1,9 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package com.example.plannermvp.feature.home
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,6 +17,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.*
@@ -25,6 +29,7 @@ import com.example.plannermvp.data.TimeBlock
 import com.example.plannermvp.data.formatRange
 import com.example.plannermvp.data.toHHMM
 import com.example.plannermvp.feature.plan.WheelTimeDialog
+import java.time.LocalDate
 
 private const val DAY_MIN = 24 * 60
 private const val GAP_UNIT_MIN = 60
@@ -34,39 +39,56 @@ sealed interface TimelineItem {
     data class Gap(val start: Int, val end: Int) : TimelineItem
 }
 
+private fun formatKoreanDate(d: LocalDate): String {
+    val dow = when (d.dayOfWeek.value) {
+        1 -> "월"
+        2 -> "화"
+        3 -> "수"
+        4 -> "목"
+        5 -> "금"
+        6 -> "토"
+        else -> "일"
+    }
+    return "${d.monthValue}월 ${d.dayOfMonth}일 ${dow}요일"
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     onGoSummary: () -> Unit
 ) {
-    // 피드백 시트
+    val todayDateText = remember { formatKoreanDate(LocalDate.now()) }
+
     var selectedBlock by remember { mutableStateOf<TimeBlock?>(null) }
     var showFeedbackSheet by remember { mutableStateOf(false) }
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val feedbackSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    // 빈 시간 클릭 → 일정 추가 다이얼(휠)
+    var longPressedBlock by remember { mutableStateOf<TimeBlock?>(null) }
+    var showManageSheet by remember { mutableStateOf(false) }
+    val manageSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
     var showAddDialog by remember { mutableStateOf(false) }
     var addStart by remember { mutableStateOf(9 * 60) }
     var addEnd by remember { mutableStateOf(10 * 60) }
 
-    val blocks = ScheduleStore.todayBlocks.sortedBy { it.startMinute }
-    val total = blocks.size
-    val reviewed = blocks.count { it.feedbackTags.isNotEmpty() || it.feedbackMemo.isNotBlank() }
+    var showEditDialog by remember { mutableStateOf(false) }
 
+    val blocks = ScheduleStore.todayBlocks.sortedBy { it.startMinute }
     val items = remember(blocks) { buildTimelineItems(blocks) }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+
+        Text(todayDateText)
+
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Card(modifier = Modifier.weight(1f)) {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Text("홈 (오늘)")
-                    Text("일정 ${total}개 / 피드백 입력 ${reviewed}개")
+                    Text("일정 ${blocks.size}개")
                 }
             }
             Button(onClick = onGoSummary) { Text("오늘 요약") }
         }
-
-        Text("타임라인 (블록=1칸, 빈 시간=1시간 칸)")
 
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(items) { item ->
@@ -77,9 +99,14 @@ fun HomeScreen(
                             onClick = {
                                 selectedBlock = item.block
                                 showFeedbackSheet = true
+                            },
+                            onLongClick = {
+                                longPressedBlock = item.block
+                                showManageSheet = true
                             }
                         )
                     }
+
                     is TimelineItem.Gap -> {
                         GapCard(
                             start = item.start,
@@ -96,7 +123,6 @@ fun HomeScreen(
         }
     }
 
-    // 빈 시간 일정 추가(휠 타임피커)
     if (showAddDialog) {
         WheelTimeDialog(
             title = "일정 추가",
@@ -104,25 +130,23 @@ fun HomeScreen(
             startDefaultMinute = addStart,
             endDefaultMinute = addEnd,
             onDismiss = { showAddDialog = false },
-            onSave = { t, s, e ->
+            onTrySave = { t, s, e ->
                 ScheduleStore.addTodayBlock(
                     title = t,
                     startMinute = s,
                     endMinute = e,
                     category = guessCategory(t)
                 )
-                showAddDialog = false
             }
         )
     }
 
-    // 피드백 BottomSheet (여기서는 기존 방식 유지: tags/memo는 다른 화면에서 구현중이면 연동)
     if (showFeedbackSheet && selectedBlock != null) {
         ModalBottomSheet(
             onDismissRequest = { showFeedbackSheet = false },
-            sheetState = sheetState
+            sheetState = feedbackSheetState
         ) {
-            SimpleFeedbackSheet(
+            FeedbackSheet(
                 block = selectedBlock!!,
                 onSave = { tags, memo ->
                     ScheduleStore.updateTodayFeedback(selectedBlock!!.id, tags, memo)
@@ -136,24 +160,72 @@ fun HomeScreen(
             Spacer(modifier = Modifier.height(24.dp))
         }
     }
+
+    if (showManageSheet && longPressedBlock != null) {
+        ModalBottomSheet(
+            onDismissRequest = { showManageSheet = false },
+            sheetState = manageSheetState
+        ) {
+            val b = longPressedBlock!!
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("일정 관리")
+                Text("${b.title} (${formatRange(b.startMinute, b.endMinute)})")
+
+                Button(
+                    onClick = {
+                        showManageSheet = false
+                        showEditDialog = true
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("수정") }
+
+                OutlinedButton(
+                    onClick = {
+                        ScheduleStore.deleteTodayBlock(b.id)
+                        showManageSheet = false
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("삭제") }
+            }
+            Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+
+    if (showEditDialog && longPressedBlock != null) {
+        val b = longPressedBlock!!
+        WheelTimeDialog(
+            title = "일정 수정",
+            titleDefault = b.title,
+            startDefaultMinute = b.startMinute,
+            endDefaultMinute = b.endMinute,
+            onDismiss = { showEditDialog = false },
+            onTrySave = { t, s, e ->
+                ScheduleStore.updateTodayBlock(
+                    id = b.id,
+                    title = t,
+                    startMinute = s,
+                    endMinute = e,
+                    category = b.category
+                )
+            }
+        )
+    }
 }
 
 @Composable
-private fun BlockCard(block: TimeBlock, onClick: () -> Unit) {
-    val time = formatRange(block.startMinute, block.endMinute)
-    val tags = if (block.feedbackTags.isEmpty()) "NONE" else block.feedbackTags.joinToString(", ")
-    val memo = if (block.feedbackMemo.isBlank()) "없음" else block.feedbackMemo
-
+private fun BlockCard(
+    block: TimeBlock,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
+) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
+        Column {
             Text(block.title)
-            Text(time)
-            Text("태그: $tags")
-            Text("메모: $memo")
+            Text(formatRange(block.startMinute, block.endMinute))
         }
     }
 }
@@ -163,46 +235,32 @@ private fun GapCard(start: Int, end: Int, onClick: () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick)
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
+        Column {
             Text("${start.toHHMM()} - ${end.toHHMM()}")
-            Text("빈 시간 (눌러서 일정 추가)")
+            Text("빈 시간 (눌러서 추가)")
         }
     }
 }
 
-/**
- * 최소 구현용: tags/memo 입력 UI
- * (추후 일정별 버튼 세트를 바꿀 예정이면 이 컴포저블만 확장하면 됨)
- */
 @Composable
-private fun SimpleFeedbackSheet(
+private fun FeedbackSheet(
     block: TimeBlock,
-    onSave: (tags: Set<String>, memo: String) -> Unit,
+    onSave: (Set<String>, String) -> Unit,
     onClear: () -> Unit
 ) {
     var memo by remember { mutableStateOf(block.feedbackMemo) }
     var tags by remember { mutableStateOf(block.feedbackTags) }
 
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("피드백")
-        Text("${block.title}  (${formatRange(block.startMinute, block.endMinute)})")
-
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ToggleTagButton("GOOD", tags) { tags = it }
-            ToggleTagButton("OKAY", tags) { tags = it }
-            ToggleTagButton("BAD", tags) { tags = it }
-            ToggleTagButton("FAIL", tags) { tags = it }
-        }
-
-        androidx.compose.material3.OutlinedTextField(
+        OutlinedTextField(
             value = memo,
             onValueChange = { memo = it },
             label = { Text("메모") },
             modifier = Modifier.fillMaxWidth()
         )
-
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { onSave(tags, memo) }) { Text("저장") }
             OutlinedButton(onClick = onClear) { Text("초기화") }
@@ -210,45 +268,19 @@ private fun SimpleFeedbackSheet(
     }
 }
 
-@Composable
-private fun ToggleTagButton(
-    label: String,
-    current: Set<String>,
-    onChange: (Set<String>) -> Unit
-) {
-    val selected = label in current
-    val text = if (selected) "[$label]" else label
-    OutlinedButton(onClick = {
-        onChange(
-            if (selected) current - label else current + label
-        )
-    }) { Text(text) }
-}
-
-/** 오늘 타임라인은 0:00~24:00만 그린다. 자정 넘김은 24:00까지만 채움 */
 private fun buildTimelineItems(blocks: List<TimeBlock>): List<TimelineItem> {
-    val sorted = blocks.sortedBy { it.startMinute }
     val result = mutableListOf<TimelineItem>()
-
     var cursor = 0
-    for (b in sorted) {
-        val blockStart = b.startMinute.coerceIn(0, DAY_MIN)
-        val blockEndToday = b.endMinute.coerceAtMost(DAY_MIN) // ✅ 자정 넘김은 오늘 구간만
 
-        // 블록 앞 갭
-        if (blockStart > cursor) {
-            addGaps(result, cursor, blockStart)
-        }
-        // 블록은 1칸(카드 1개)
+    for (b in blocks) {
+        val start = b.startMinute.coerceIn(0, DAY_MIN)
+        val end = b.endMinute.coerceAtMost(DAY_MIN)
+
+        if (start > cursor) addGaps(result, cursor, start)
         result.add(TimelineItem.Block(b))
-
-        // cursor는 오늘 범위까지만 전진
-        cursor = maxOf(cursor, blockEndToday)
+        cursor = maxOf(cursor, end)
     }
-    // 끝 갭
-    if (cursor < DAY_MIN) {
-        addGaps(result, cursor, DAY_MIN)
-    }
+    if (cursor < DAY_MIN) addGaps(result, cursor, DAY_MIN)
     return result
 }
 
@@ -264,9 +296,9 @@ private fun addGaps(out: MutableList<TimelineItem>, start: Int, end: Int) {
 private fun guessCategory(title: String): Category {
     val t = title.lowercase()
     return when {
-        "수면" in t || "sleep" in t -> Category.SLEEP
-        "운동" in t || "workout" in t || "gym" in t -> Category.EXERCISE
-        "공부" in t || "study" in t -> Category.STUDY
+        "수면" in t -> Category.SLEEP
+        "운동" in t -> Category.EXERCISE
+        "공부" in t -> Category.STUDY
         else -> Category.ETC
     }
 }
