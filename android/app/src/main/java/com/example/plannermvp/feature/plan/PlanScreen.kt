@@ -4,7 +4,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.OutlinedButton
@@ -31,84 +35,122 @@ fun PlanScreen(
     var dialogEnd by remember { mutableStateOf(10 * 60) }
     var dialogCategory by remember { mutableStateOf(Category.ETC) }
 
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("내일 계획 세우기")
+    val yesterday = ScheduleStore.yesterdayBlocks.toList()
+    val tomorrow = ScheduleStore.tomorrowBlocks.sortedBy { it.startMinute }
 
-        OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
-            Text("뒤로(오늘요약)")
-        }
+    Column(
+        modifier = Modifier.fillMaxSize()
+    ) {
+        // ✅ 스크롤 영역
+        LazyColumn(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item { Text("내일 계획 세우기") }
 
-        // 어제 목록: 눌러서 시간 수정 후 추가
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("어제 일정 (눌러서 시간 수정 후 추가)")
-                ScheduleStore.yesterdayBlocks.forEach { b ->
-                    OutlinedButton(
-                        onClick = {
-                            // '추가' 다이얼(시간/이름 수정 가능)
-                            editingId = null
-                            dialogTitle = b.title
-                            dialogStart = b.startMinute
-                            dialogEnd = b.endMinute
-                            dialogCategory = b.category
-                            showDialog = true
-                        },
-                        modifier = Modifier.fillMaxWidth()
+            item {
+                OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
+                    Text("뒤로(오늘요약)")
+                }
+            }
+
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text("${b.title}  ${b.startMinute.toHHMM()}-${b.endMinute.toHHMM()}")
+                        Text("어제 일정 (눌러서 시간 수정 후 추가)")
+                        if (yesterday.isEmpty()) {
+                            Text("어제 일정이 없습니다.")
+                        } else {
+                            yesterday.forEach { b ->
+                                OutlinedButton(
+                                    onClick = {
+                                        // 추가 다이얼(시간/이름 수정 가능)
+                                        editingId = null
+                                        dialogTitle = b.title
+                                        dialogStart = b.startMinute
+                                        dialogEnd = b.endMinute
+                                        dialogCategory = b.category
+                                        showDialog = true
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("${b.title}  ${b.startMinute.toHHMM()}-${b.endMinute.toHHMM()}")
+                                }
+                            }
+                        }
                     }
                 }
             }
-        }
 
-        // 새 일정 만들기
-        Button(
-            onClick = {
-                editingId = null
-                dialogTitle = ""
-                dialogStart = 9 * 60
-                dialogEnd = 10 * 60
-                dialogCategory = Category.ETC
-                showDialog = true
-            },
-            modifier = Modifier.fillMaxWidth()
-        ) { Text("새 일정 만들기") }
+            item {
+                Button(
+                    onClick = {
+                        editingId = null
+                        dialogTitle = ""
+                        dialogStart = 9 * 60
+                        dialogEnd = 10 * 60
+                        dialogCategory = Category.ETC
+                        showDialog = true
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("새 일정 만들기") }
+            }
 
-        // 내일 일정(편집 가능: 탭=수정, 삭제)
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("내일 일정 (홈으로 가기 전까지 수정/삭제 가능)")
-                if (ScheduleStore.tomorrowBlocks.isEmpty()) {
-                    Text("아직 없음")
-                } else {
-                    ScheduleStore.tomorrowBlocks
-                        .sortedBy { it.startMinute }
-                        .forEach { b ->
-                            TomorrowRow(
-                                block = b,
-                                onEdit = {
-                                    editingId = b.id
-                                    dialogTitle = b.title
-                                    dialogStart = b.startMinute
-                                    dialogEnd = b.endMinute
-                                    dialogCategory = b.category
-                                    showDialog = true
-                                },
-                                onDelete = { ScheduleStore.deleteTomorrowBlock(b.id) }
-                            )
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("내일 일정 (홈으로 가기 전까지 수정/삭제 가능)")
+                        if (tomorrow.isEmpty()) {
+                            Text("아직 없음")
+                        } else {
+                            tomorrow.forEach { b ->
+                                TomorrowRow(
+                                    block = b,
+                                    onEdit = {
+                                        editingId = b.id
+                                        dialogTitle = b.title
+                                        dialogStart = b.startMinute
+                                        dialogEnd = b.endMinute
+                                        dialogCategory = b.category
+                                        showDialog = true
+                                    },
+                                    onDelete = { ScheduleStore.deleteTomorrowBlock(b.id) }
+                                )
+                            }
                         }
+                    }
                 }
             }
+
+            // ✅ 하단 버튼 영역과 겹치지 않도록 여백
+            item { Text("") }
         }
 
-        Button(
-            onClick = {
-                ScheduleStore.finalizeTomorrowToToday()
-                onDone()
-            },
-            modifier = Modifier.fillMaxWidth()
+        // ✅ 하단 고정 버튼(항상 보임)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text("완료하기 (홈으로)")
+            Button(
+                onClick = {
+                    ScheduleStore.finalizeTomorrowToToday()
+                    onDone()
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("완료하기 (홈으로)")
+            }
         }
     }
 
