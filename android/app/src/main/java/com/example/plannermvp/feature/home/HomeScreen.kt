@@ -17,6 +17,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -31,6 +32,8 @@ import com.example.plannermvp.data.ScheduleStore
 import com.example.plannermvp.data.TimeBlock
 import com.example.plannermvp.data.toHHMM
 import com.example.plannermvp.feature.plan.WheelTimeDialog
+import java.time.LocalDate
+import java.time.DayOfWeek
 
 private const val GAP_UNIT_MIN = 60
 
@@ -44,6 +47,10 @@ sealed interface TimelineItem {
 fun HomeScreen(
     onGoSummary: () -> Unit
 ) {
+    // 날짜 표시
+    val today = LocalDate.now()
+    val dateText = formatKoreanDate(today)
+
     // 피드백 시트
     var selectedBlock by remember { mutableStateOf<TimeBlock?>(null) }
     var showFeedbackSheet by remember { mutableStateOf(false) }
@@ -68,7 +75,7 @@ fun HomeScreen(
 
     val blocks = ScheduleStore.todayBlocks.sortedBy { it.startMinute }
     val total = blocks.size
-    val reviewed = blocks.count { it.feedbackTags.isNotEmpty() }
+    val reviewed = blocks.count { it.feedbackTags.isNotEmpty() || it.feedbackMemo.isNotBlank() }
     val items = remember(blocks) { buildTimelineItems(blocks) }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -76,6 +83,7 @@ fun HomeScreen(
             Card(modifier = Modifier.weight(1f)) {
                 Column {
                     Text("홈 (오늘)")
+                    Text(dateText) // ✅ 0월0일0요일
                     Text("일정 ${total}개 / 피드백 입력 ${reviewed}개")
                 }
             }
@@ -141,10 +149,11 @@ fun HomeScreen(
         AlertDialog(
             onDismissRequest = { showEditMenu = false },
             title = { Text("일정 관리") },
-            text = { Text("${longPressedBlock!!.title}  ${longPressedBlock!!.startMinute.toHHMM()}-${longPressedBlock!!.endMinute.toHHMM()}") },
+            text = {
+                Text("${longPressedBlock!!.title}  ${longPressedBlock!!.startMinute.toHHMM()}-${longPressedBlock!!.endMinute.toHHMM()}")
+            },
             confirmButton = {
                 Button(onClick = {
-                    // 수정 다이얼 열기
                     val b = longPressedBlock!!
                     editId = b.id
                     editTitle = b.title
@@ -158,7 +167,6 @@ fun HomeScreen(
             dismissButton = {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = {
-                        // 삭제
                         ScheduleStore.deleteTodayBlock(longPressedBlock!!.id)
                         showEditMenu = false
                     }) { Text("삭제") }
@@ -189,20 +197,20 @@ fun HomeScreen(
         )
     }
 
-    // 피드백 BottomSheet(복수 선택)
+    // 피드백 BottomSheet(복수 선택 + 메모)
     if (showFeedbackSheet && selectedBlock != null) {
         ModalBottomSheet(
             onDismissRequest = { showFeedbackSheet = false },
             sheetState = sheetState
         ) {
-            FeedbackSheetMulti(
+            FeedbackSheetMultiWithMemo(
                 block = selectedBlock!!,
-                onSave = { tags ->
-                    ScheduleStore.updateTodayFeedbackTags(selectedBlock!!.id, tags)
+                onSave = { tags, memo ->
+                    ScheduleStore.updateTodayFeedback(selectedBlock!!.id, tags, memo)
                     showFeedbackSheet = false
                 },
                 onClear = {
-                    ScheduleStore.updateTodayFeedbackTags(selectedBlock!!.id, emptySet())
+                    ScheduleStore.clearTodayFeedback(selectedBlock!!.id)
                     showFeedbackSheet = false
                 }
             )
@@ -220,6 +228,7 @@ private fun BlockCard(
 ) {
     val time = "${block.startMinute.toHHMM()} - ${block.endMinute.toHHMM()}"
     val tags = if (block.feedbackTags.isEmpty()) "NONE" else block.feedbackTags.joinToString(", ")
+    val memo = if (block.feedbackMemo.isBlank()) "" else " / 메모: ${block.feedbackMemo}"
 
     Card(
         modifier = Modifier
@@ -232,7 +241,7 @@ private fun BlockCard(
         Column {
             Text(block.title)
             Text(time)
-            Text("피드백: $tags")
+            Text("피드백: $tags$memo")
         }
     }
 }
@@ -252,19 +261,19 @@ private fun GapCard(start: Int, end: Int, onClick: () -> Unit) {
 }
 
 @Composable
-private fun FeedbackSheetMulti(
+private fun FeedbackSheetMultiWithMemo(
     block: TimeBlock,
-    onSave: (Set<String>) -> Unit,
+    onSave: (Set<String>, String) -> Unit,
     onClear: () -> Unit
 ) {
     val options = ScheduleStore.feedbackOptionsFor(block.category)
     var selected by remember(block.id) { mutableStateOf(block.feedbackTags.toMutableSet()) }
+    var memo by remember(block.id) { mutableStateOf(block.feedbackMemo) }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("피드백(복수 선택 가능)")
+        Text("피드백(복수 선택 가능) + 메모")
         Text("${block.title}  (${block.startMinute.toHHMM()} - ${block.endMinute.toHHMM()})")
 
-        // 버튼 토글들 (MVP: OutlinedButton로 토글)
         options.chunked(2).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 row.forEach { tag ->
@@ -283,11 +292,19 @@ private fun FeedbackSheetMulti(
             }
         }
 
-        Button(onClick = { onSave(selected.toSet()) }, modifier = Modifier.fillMaxWidth()) {
+        OutlinedTextField(
+            value = memo,
+            onValueChange = { memo = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("추가 메모(선택)") },
+            singleLine = false
+        )
+
+        Button(onClick = { onSave(selected.toSet(), memo.trim()) }, modifier = Modifier.fillMaxWidth()) {
             Text("저장")
         }
         OutlinedButton(onClick = onClear, modifier = Modifier.fillMaxWidth()) {
-            Text("피드백 지우기")
+            Text("피드백/메모 지우기")
         }
     }
 }
@@ -299,7 +316,7 @@ private fun buildTimelineItems(blocks: List<TimeBlock>): List<TimelineItem> {
     var cursor = 0
     for (b in sorted) {
         if (b.startMinute > cursor) addGaps(result, cursor, b.startMinute)
-        result.add(TimelineItem.Block(b)) // 블록은 1칸
+        result.add(TimelineItem.Block(b))
         cursor = maxOf(cursor, b.endMinute)
     }
     if (cursor < 24 * 60) addGaps(result, cursor, 24 * 60)
@@ -323,4 +340,17 @@ private fun guessCategory(title: String): Category {
         "공부" in t || "study" in t -> Category.STUDY
         else -> Category.ETC
     }
+}
+
+private fun formatKoreanDate(date: LocalDate): String {
+    val dow = when (date.dayOfWeek) {
+        DayOfWeek.MONDAY -> "월요일"
+        DayOfWeek.TUESDAY -> "화요일"
+        DayOfWeek.WEDNESDAY -> "수요일"
+        DayOfWeek.THURSDAY -> "목요일"
+        DayOfWeek.FRIDAY -> "금요일"
+        DayOfWeek.SATURDAY -> "토요일"
+        DayOfWeek.SUNDAY -> "일요일"
+    }
+    return "${date.monthValue}월 ${date.dayOfMonth}일 $dow"
 }

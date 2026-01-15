@@ -10,7 +10,12 @@ data class TimeBlock(
     val startMinute: Int,
     val endMinute: Int,
     val category: Category = Category.ETC,
-    val feedbackTags: Set<String> = emptySet()
+
+    // ✅ 피드백 태그(복수 선택)
+    val feedbackTags: Set<String> = emptySet(),
+
+    // ✅ 추가 메모(타자 입력)
+    val feedbackMemo: String = ""
 )
 
 fun Int.toHHMM(): String {

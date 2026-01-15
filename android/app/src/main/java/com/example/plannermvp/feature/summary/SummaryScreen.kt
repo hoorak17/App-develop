@@ -18,7 +18,7 @@ fun SummaryScreen(
 ) {
     val blocks = ScheduleStore.todayBlocks.sortedBy { it.startMinute }
     val total = blocks.size
-    val reviewed = blocks.count { it.feedbackTags.isNotEmpty() }
+    val reviewed = blocks.count { it.feedbackTags.isNotEmpty() || it.feedbackMemo.isNotBlank() }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -29,11 +29,14 @@ fun SummaryScreen(
         Text("오늘 요약")
         Text("일정 ${total}개 / 피드백 입력 ${reviewed}개")
 
-        Text("일정별 피드백")
+        Text("일정별 피드백/메모")
         blocks.forEach { b ->
             val time = "${b.startMinute.toHHMM()}-${b.endMinute.toHHMM()}"
             val tags = if (b.feedbackTags.isEmpty()) "NONE" else b.feedbackTags.joinToString(", ")
-            Text("- ${b.title} ($time) : $tags")
+            val memo = if (b.feedbackMemo.isBlank()) "없음" else b.feedbackMemo
+            Text("- ${b.title} ($time)")
+            Text("  태그: $tags")
+            Text("  메모: $memo")
         }
     }
 }
