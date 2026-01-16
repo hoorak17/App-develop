@@ -253,20 +253,71 @@ private fun FeedbackSheet(
     var memo by remember { mutableStateOf(block.feedbackMemo) }
     var tags by remember { mutableStateOf(block.feedbackTags) }
 
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    // ✅ 피드백 블럭 목록 (ScheduleStore에 함수가 있으면 그걸 쓰고, 없으면 기본값 사용)
+    val options = remember(block.category) {
+        try {
+            ScheduleStore.feedbackOptionsFor(block.category)
+        } catch (e: Throwable) {
+            listOf(
+                "GOOD", "OKAY", "BAD", "FAIL",
+                "늦게 시작", "과대 계획", "집중 잘 됨", "집중 안 됨", "변수 발생"
+            )
+        }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("피드백")
+        Text("${block.title} (${formatRange(block.startMinute, block.endMinute)})")
+
+        // ✅ 여러 개 선택 가능한 블럭 버튼
+        val half = (options.size + 1) / 2
+        val row1 = options.take(half)
+        val row2 = options.drop(half)
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            row1.forEach { label ->
+                ToggleTagButton(label = label, current = tags) { tags = it }
+            }
+        }
+        if (row2.isNotEmpty()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                row2.forEach { label ->
+                    ToggleTagButton(label = label, current = tags) { tags = it }
+                }
+            }
+        }
+
+        // ✅ 메모
         OutlinedTextField(
             value = memo,
             onValueChange = { memo = it },
             label = { Text("메모") },
             modifier = Modifier.fillMaxWidth()
         )
+
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { onSave(tags, memo) }) { Text("저장") }
             OutlinedButton(onClick = onClear) { Text("초기화") }
         }
     }
 }
+
+@Composable
+private fun ToggleTagButton(
+    label: String,
+    current: Set<String>,
+    onChange: (Set<String>) -> Unit
+) {
+    val selected = label in current
+    val text = if (selected) "[$label]" else label
+
+    OutlinedButton(onClick = {
+        onChange(if (selected) current - label else current + label)
+    }) {
+        Text(text)
+    }
+}
+
 
 private fun buildTimelineItems(blocks: List<TimeBlock>): List<TimelineItem> {
     val result = mutableListOf<TimelineItem>()
