@@ -58,11 +58,35 @@ object ScheduleStore {
     }
 
     // ---------------------------
-    // Overlap validation
+    // Overlap validation (자정 넘김 지원)
     // ---------------------------
+    private const val DAY_MIN = 24 * 60
+
     private fun overlaps(aStart: Int, aEnd: Int, bStart: Int, bEnd: Int): Boolean {
         // [start, end) interval overlap
         return maxOf(aStart, bStart) < minOf(aEnd, bEnd)
+    }
+
+    /**
+     * start~end(>=start) 구간이 24:00을 넘길 수 있는 블럭일 때,
+     * "오늘 하루(0..1440)" 관점에서 겹침검사를 하기 위해 1개 또는 2개의 구간으로 분할한다.
+     *
+     * 예) 23:00(1380)~01:00(+1일,1500) => [1380,1440) + [0,60)
+     * 예) 10:00(600)~12:00(720) => [600,720)
+     */
+    private fun splitIntervals(start: Int, end: Int): List<Pair<Int, Int>> {
+        if (end <= start) return emptyList()
+
+        // start는 0..1439 기준으로 들어온다고 가정(현재 UI가 그렇게 만듦)
+        if (end <= DAY_MIN) {
+            return listOf(start to end)
+        }
+
+        val endNext = end % DAY_MIN
+        return listOf(
+            start to DAY_MIN,
+            0 to endNext
+        )
     }
 
     private fun canPlace(
@@ -72,9 +96,19 @@ object ScheduleStore {
         endMinute: Int
     ): Boolean {
         if (endMinute <= startMinute) return false
+
+        val aParts = splitIntervals(startMinute, endMinute)
+        if (aParts.isEmpty()) return false
+
         for (b in list) {
             if (ignoreId != null && b.id == ignoreId) continue
-            if (overlaps(startMinute, endMinute, b.startMinute, b.endMinute)) return false
+
+            val bParts = splitIntervals(b.startMinute, b.endMinute)
+            for (ap in aParts) {
+                for (bp in bParts) {
+                    if (overlaps(ap.first, ap.second, bp.first, bp.second)) return false
+                }
+            }
         }
         return true
     }

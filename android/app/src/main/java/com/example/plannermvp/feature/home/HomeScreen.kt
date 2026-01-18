@@ -8,8 +8,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
@@ -57,7 +59,8 @@ private fun formatKoreanDate(d: LocalDate): String {
 fun HomeScreen(
     onGoSummary: () -> Unit
 ) {
-    val todayDateText = remember { formatKoreanDate(LocalDate.now()) }
+    val today = LocalDate.now()
+    val todayDateText = remember(today) { formatKoreanDate(today) }
 
     var selectedBlock by remember { mutableStateOf<TimeBlock?>(null) }
     var showFeedbackSheet by remember { mutableStateOf(false) }
@@ -76,13 +79,17 @@ fun HomeScreen(
     val blocks = ScheduleStore.todayBlocks.sortedBy { it.startMinute }
     val items = remember(blocks) { buildTimelineItems(blocks) }
 
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
         Text(todayDateText)
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Card(modifier = Modifier.weight(1f)) {
-                Column(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
                     Text("홈 (오늘)")
                     Text("일정 ${blocks.size}개")
                 }
@@ -90,7 +97,12 @@ fun HomeScreen(
             Button(onClick = onGoSummary) { Text("오늘 요약") }
         }
 
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             items(items) { item ->
                 when (item) {
                     is TimelineItem.Block -> {
@@ -167,7 +179,10 @@ fun HomeScreen(
             sheetState = manageSheetState
         ) {
             val b = longPressedBlock!!
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 Text("일정 관리")
                 Text("${b.title} (${formatRange(b.startMinute, b.endMinute)})")
 
@@ -223,7 +238,7 @@ private fun BlockCard(
             .fillMaxWidth()
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
     ) {
-        Column {
+        Column(modifier = Modifier.padding(12.dp)) {
             Text(block.title)
             Text(formatRange(block.startMinute, block.endMinute))
         }
@@ -237,7 +252,7 @@ private fun GapCard(start: Int, end: Int, onClick: () -> Unit) {
             .fillMaxWidth()
             .combinedClickable(onClick = onClick)
     ) {
-        Column {
+        Column(modifier = Modifier.padding(12.dp)) {
             Text("${start.toHHMM()} - ${end.toHHMM()}")
             Text("빈 시간 (눌러서 추가)")
         }
@@ -253,7 +268,6 @@ private fun FeedbackSheet(
     var memo by remember { mutableStateOf(block.feedbackMemo) }
     var tags by remember { mutableStateOf(block.feedbackTags) }
 
-    // ✅ 피드백 블럭 목록 (ScheduleStore에 함수가 있으면 그걸 쓰고, 없으면 기본값 사용)
     val options = remember(block.category) {
         try {
             ScheduleStore.feedbackOptionsFor(block.category)
@@ -265,11 +279,13 @@ private fun FeedbackSheet(
         }
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(
+        modifier = Modifier.padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
         Text("피드백")
         Text("${block.title} (${formatRange(block.startMinute, block.endMinute)})")
 
-        // ✅ 여러 개 선택 가능한 블럭 버튼
         val half = (options.size + 1) / 2
         val row1 = options.take(half)
         val row2 = options.drop(half)
@@ -287,7 +303,6 @@ private fun FeedbackSheet(
             }
         }
 
-        // ✅ 메모
         OutlinedTextField(
             value = memo,
             onValueChange = { memo = it },
@@ -317,7 +332,6 @@ private fun ToggleTagButton(
         Text(text)
     }
 }
-
 
 private fun buildTimelineItems(blocks: List<TimeBlock>): List<TimelineItem> {
     val result = mutableListOf<TimelineItem>()

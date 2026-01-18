@@ -62,7 +62,6 @@ fun PlanScreen(
             }
         }
 
-        // ✅ 스크롤 영역
         LazyColumn(
             modifier = Modifier
                 .fillMaxWidth()
@@ -140,7 +139,6 @@ fun PlanScreen(
 
                             OutlinedButton(
                                 onClick = {
-                                    // ✅ 여기! removeTomorrowBlock가 아니라 deleteTomorrowBlock
                                     ScheduleStore.deleteTomorrowBlock(b.id)
                                 },
                                 modifier = Modifier.weight(1f)
@@ -152,7 +150,6 @@ fun PlanScreen(
         }
     }
 
-    // ✅ 다이얼
     if (showDialog) {
         val (titleDefault, startDefault, endDefault) = when (val m = dialogMode) {
             DialogMode.AddNew -> Triple("", 9 * 60, 10 * 60)
