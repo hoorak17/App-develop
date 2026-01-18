@@ -2,16 +2,13 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
-
-    // ✅ (1)에서 toml에 등록한 플러그인
+    // ✅ kotlinx serialization (버전은 libs.versions.toml에서 관리)
     alias(libs.plugins.kotlin.serialization)
 }
 
 android {
     namespace = "com.example.plannermvp"
-    compileSdk {
-        version = release(36)
-    }
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.example.plannermvp"
@@ -19,7 +16,6 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
-
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -32,13 +28,16 @@ android {
             )
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+
     kotlinOptions {
         jvmTarget = "11"
     }
+
     buildFeatures {
         compose = true
     }
@@ -54,12 +53,13 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
 
-    // ✅ 저장(DataStore) + JSON 직렬화
-    implementation("androidx.datastore:datastore-preferences:1.1.1")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
-
-    // 기존 네비게이션
     implementation("androidx.navigation:navigation-compose:2.7.7")
+
+    // ✅ DataStore (typed)
+    implementation("androidx.datastore:datastore:1.1.1")
+
+    // ✅ Kotlinx Serialization JSON
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

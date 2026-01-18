@@ -2,36 +2,100 @@ package com.example.plannermvp.data
 
 import android.content.Context
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import com.example.plannermvp.data.persistence.ScheduleDataStore
 import com.example.plannermvp.data.persistence.ScheduleSnapshot
-import com.example.plannermvp.data.persistence.TimeBlockDto
 import kotlinx.coroutines.*
+import java.time.LocalDate
+import java.time.LocalDateTime
 
 object ScheduleStore {
 
     // ---------------------------
-    // In-memory state (Compose observes)
+    // State
     // ---------------------------
     val todayBlocks = mutableStateListOf<TimeBlock>()
     val yesterdayBlocks = mutableStateListOf<TimeBlock>()
     val tomorrowBlocks = mutableStateListOf<TimeBlock>()
 
-    private var isAdvancing: Boolean = false
-    private var seededOnce: Boolean = false
+    /** 최근 N일 히스토리 (일자별 blocks) */
+    val historyDays = mutableStateListOf<DayRecord>()
+
+    data class DayRecord(
+        val dateIso: String,
+        val blocks: List<TimeBlock>
+    )
+
+    private const val DAY_MIN = 24 * 60
+    private const val HISTORY_KEEP_DAYS = 30
+
+    private var isAdvancing = false
+    private var seededOnce = false
 
     // ---------------------------
-    // Persistence (DataStore + JSON)
+    // Dev Mode (시간/날짜 시뮬레이션)
+    // ---------------------------
+    private val _devMode = mutableStateOf(false)
+    val devMode: Boolean get() = _devMode.value
+
+    private var devBaseRealNow: LocalDateTime? = null
+    private var devOffsetMinutes: Long = 0L
+    private var devOffsetDays: Long = 0L
+
+    private var snapshotBeforeDev: ScheduleSnapshot? = null
+
+    fun nowDateTime(): LocalDateTime {
+        return if (!devMode) {
+            LocalDateTime.now()
+        } else {
+            val base = devBaseRealNow ?: LocalDateTime.now()
+            base.plusDays(devOffsetDays).plusMinutes(devOffsetMinutes)
+        }
+    }
+
+    fun nowMinuteOfDay(): Int {
+        val now = nowDateTime()
+        return (now.hour * 60 + now.minute).coerceIn(0, DAY_MIN - 1)
+    }
+
+    fun toggleDevMode() {
+        if (!devMode) {
+            snapshotBeforeDev = buildSnapshot(schemaVersion = 3)
+            devBaseRealNow = LocalDateTime.now()
+            devOffsetMinutes = 0L
+            devOffsetDays = 0L
+            _devMode.value = true
+        } else {
+            snapshotBeforeDev?.let { applySnapshotToState(it) }
+            snapshotBeforeDev = null
+            devBaseRealNow = null
+            devOffsetMinutes = 0L
+            devOffsetDays = 0L
+            _devMode.value = false
+
+            // dev OFF 후 실사용 상태 저장
+            persistDebounced()
+        }
+    }
+
+    fun devAdjustMinutes(deltaMinutes: Int) {
+        if (!devMode) return
+        devOffsetMinutes += deltaMinutes.toLong()
+    }
+
+    fun devAdjustDays(deltaDays: Int) {
+        if (!devMode) return
+        devOffsetDays += deltaDays.toLong()
+    }
+
+    // ---------------------------
+    // Persistence (SharedPreferences)
     // ---------------------------
     private var appContext: Context? = null
     private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var saveJob: Job? = null
-    private var loadedOnce: Boolean = false
+    private var loadedOnce = false
 
-    /**
-     * MainActivity에서 applicationContext로 1회 호출.
-     * - 저장 데이터 있으면 복원
-     * - 없으면 seed 유지
-     */
     fun initPersistence(context: Context) {
         if (appContext != null) return
         appContext = context.applicationContext
@@ -39,90 +103,152 @@ object ScheduleStore {
         ioScope.launch {
             val snap = ScheduleDataStore.load(appContext!!)
             if (snap != null) {
-                applySnapshotOnMain(snap)
+                withContext(Dispatchers.Main) { applySnapshotToState(snap) }
                 loadedOnce = true
             } else {
-                // 저장본 없으면 seed
                 withContext(Dispatchers.Main) { seedIfNeeded() }
                 loadedOnce = true
-                persistDebounced() // seed도 저장해두면 다음 실행부터 안정적
+                persistDebounced()
             }
-        }
-    }
-
-    private suspend fun applySnapshotOnMain(snap: ScheduleSnapshot) {
-        withContext(Dispatchers.Main) {
-            todayBlocks.clear()
-            yesterdayBlocks.clear()
-            tomorrowBlocks.clear()
-
-            todayBlocks.addAll(snap.today.map { it.toDomain() })
-            yesterdayBlocks.addAll(snap.yesterday.map { it.toDomain() })
-            tomorrowBlocks.addAll(snap.tomorrow.map { it.toDomain() })
         }
     }
 
     private fun persistDebounced() {
         val ctx = appContext ?: return
-        if (!loadedOnce) return // 로드 완료 전에는 저장하지 않음
+        if (!loadedOnce) return
+        if (devMode) return // 요구사항: dev 기간 기록은 저장 금지
 
         saveJob?.cancel()
         saveJob = ioScope.launch {
-            delay(600) // 디바운스
-            val snap = ScheduleSnapshot(
-                schemaVersion = 1,
-                today = todayBlocks.map { TimeBlockDto.fromDomain(it) },
-                yesterday = yesterdayBlocks.map { TimeBlockDto.fromDomain(it) },
-                tomorrow = tomorrowBlocks.map { TimeBlockDto.fromDomain(it) }
-            )
-            ScheduleDataStore.save(ctx, snap)
+            delay(600)
+            ScheduleDataStore.save(ctx, buildSnapshot(schemaVersion = 3))
         }
     }
 
+    private fun buildSnapshot(schemaVersion: Int): ScheduleSnapshot {
+        return ScheduleSnapshot(
+            schemaVersion = schemaVersion,
+            today = todayBlocks.map { it.copy() },
+            yesterday = yesterdayBlocks.map { it.copy() },
+            tomorrow = tomorrowBlocks.map { it.copy() },
+            history = historyDays.map { day ->
+                ScheduleSnapshot.HistoryDay(
+                    dateIso = day.dateIso,
+                    blocks = day.blocks.map { it.copy() }
+                )
+            }
+        )
+    }
+
+    private fun applySnapshotToState(snap: ScheduleSnapshot) {
+        todayBlocks.clear()
+        yesterdayBlocks.clear()
+        tomorrowBlocks.clear()
+        historyDays.clear()
+
+        todayBlocks.addAll(snap.today.map { it.copy() })
+        yesterdayBlocks.addAll(snap.yesterday.map { it.copy() })
+        tomorrowBlocks.addAll(snap.tomorrow.map { it.copy() })
+
+        historyDays.addAll(
+            snap.history.map { day ->
+                DayRecord(
+                    dateIso = day.dateIso,
+                    blocks = day.blocks.map { it.copy() }
+                )
+            }
+        )
+    }
+
     // ---------------------------
-    // Seed (default blocks)
+    // Seed
     // ---------------------------
     private fun seedIfNeeded() {
         if (seededOnce) return
         seededOnce = true
 
         if (todayBlocks.isNotEmpty()) return
+        todayBlocks.add(TimeBlock(title = "수면", startMinute = 0, endMinute = 8 * 60, category = Category.SLEEP))
+        todayBlocks.add(TimeBlock(title = "공부", startMinute = 10 * 60, endMinute = 12 * 60, category = Category.STUDY))
+        todayBlocks.add(TimeBlock(title = "운동", startMinute = 18 * 60, endMinute = 19 * 60, category = Category.EXERCISE))
+    }
 
-        todayBlocks.add(
-            TimeBlock(
-                title = "수면",
-                startMinute = 0,
-                endMinute = 8 * 60,
-                category = Category.SLEEP
-            )
-        )
-        todayBlocks.add(
-            TimeBlock(
-                title = "공부",
-                startMinute = 10 * 60,
-                endMinute = 12 * 60,
-                category = Category.STUDY
-            )
-        )
-        todayBlocks.add(
-            TimeBlock(
-                title = "운동",
-                startMinute = 18 * 60,
-                endMinute = 19 * 60,
-                category = Category.EXERCISE
-            )
-        )
+    // ---------------------------
+    // History
+    // ---------------------------
+    private fun upsertHistoryDay(dateIso: String, blocks: List<TimeBlock>) {
+        val idx = historyDays.indexOfFirst { it.dateIso == dateIso }
+        val record = DayRecord(dateIso, blocks.map { it.copy() })
+        if (idx >= 0) historyDays[idx] = record else historyDays.add(record)
+
+        historyDays.sortBy { it.dateIso }
+        if (historyDays.size > HISTORY_KEEP_DAYS) {
+            val drop = historyDays.size - HISTORY_KEEP_DAYS
+            repeat(drop) { historyDays.removeAt(0) }
+        }
+    }
+
+    private fun archiveTodayToHistory() {
+        if (devMode) return
+        val todayIso = LocalDate.now().toString()
+        if (todayBlocks.isEmpty()) return
+        upsertHistoryDay(todayIso, todayBlocks.toList())
+    }
+
+    fun historyForTitle(title: String, limit: Int = 10): List<HistoryItem> {
+        val t = title.trim()
+        if (t.isEmpty()) return emptyList()
+
+        val todayIso = LocalDate.now().toString()
+        val items = mutableListOf<HistoryItem>()
+
+        for (day in historyDays) {
+            if (day.dateIso == todayIso) continue
+            for (b in day.blocks) {
+                if (b.title.trim() == t) {
+                    val hasFb = b.feedbackTags.isNotEmpty() || b.feedbackMemo.isNotBlank()
+                    items.add(
+                        HistoryItem(
+                            dateIso = day.dateIso,
+                            startMinute = b.startMinute,
+                            endMinute = b.endMinute,
+                            tags = b.feedbackTags,
+                            memo = b.feedbackMemo,
+                            hasFeedback = hasFb
+                        )
+                    )
+                }
+            }
+        }
+        return items.sortedByDescending { it.dateIso }.take(limit)
+    }
+
+    data class HistoryItem(
+        val dateIso: String,
+        val startMinute: Int,
+        val endMinute: Int,
+        val tags: Set<String>,
+        val memo: String,
+        val hasFeedback: Boolean
+    )
+
+    fun blocksOfHistoryDay(dateIso: String): List<TimeBlock> {
+        return historyDays.firstOrNull { it.dateIso == dateIso }?.blocks ?: emptyList()
+    }
+
+    fun historyDayList(limit: Int = 14): List<String> {
+        return historyDays.map { it.dateIso }.sortedDescending().take(limit)
     }
 
     // ---------------------------
     // Planning flow
     // ---------------------------
     fun preparePlanningNextDay() {
-        // "어제" = 방금까지의 "오늘" 스냅샷
+        archiveTodayToHistory()
+
         yesterdayBlocks.clear()
         yesterdayBlocks.addAll(todayBlocks.map { it.copy() })
 
-        // 계획 화면 진입 시 내일 계획은 새로 작성
         tomorrowBlocks.clear()
 
         persistDebounced()
@@ -132,15 +258,11 @@ object ScheduleStore {
         if (isAdvancing) return
         isAdvancing = true
         try {
-            // yesterday <- today
             yesterdayBlocks.clear()
             yesterdayBlocks.addAll(todayBlocks.map { it.copy() })
 
-            // today <- tomorrow (피드백 초기화)
             todayBlocks.clear()
-            todayBlocks.addAll(
-                tomorrowBlocks.map { it.copy(feedbackTags = emptySet(), feedbackMemo = "") }
-            )
+            todayBlocks.addAll(tomorrowBlocks.map { it.copy(feedbackTags = emptySet(), feedbackMemo = "") })
 
             tomorrowBlocks.clear()
         } finally {
@@ -152,58 +274,37 @@ object ScheduleStore {
     // ---------------------------
     // Overlap validation (자정 넘김 지원)
     // ---------------------------
-    private const val DAY_MIN = 24 * 60
-
     private fun overlaps(aStart: Int, aEnd: Int, bStart: Int, bEnd: Int): Boolean {
-        // [start, end) overlap
         return maxOf(aStart, bStart) < minOf(aEnd, bEnd)
     }
 
-    /**
-     * endMinute가 1440 초과(자정 넘김)일 수 있으므로
-     * [start, end) 를 0~1440 범위의 구간들로 분해해서 비교한다.
-     */
     private fun splitIntervals(start: Int, end: Int): List<Pair<Int, Int>> {
         if (end <= start) return emptyList()
         if (end <= DAY_MIN) return listOf(start to end)
-
-        // ex) 23:00(1380) ~ 01:00(+1일, 1500)
         val endNext = end % DAY_MIN
-        return listOf(
-            start to DAY_MIN,
-            0 to endNext
-        )
+        return listOf(start to DAY_MIN, 0 to endNext)
     }
 
-    private fun canPlace(
-        list: List<TimeBlock>,
-        ignoreId: String?,
-        startMinute: Int,
-        endMinute: Int
-    ): Boolean {
+    private fun canPlace(list: List<TimeBlock>, ignoreId: String?, startMinute: Int, endMinute: Int): Boolean {
         if (endMinute <= startMinute) return false
-
         val aParts = splitIntervals(startMinute, endMinute)
         if (aParts.isEmpty()) return false
 
         for (b in list) {
             if (ignoreId != null && b.id == ignoreId) continue
-
             val bParts = splitIntervals(b.startMinute, b.endMinute)
-            for (ap in aParts) {
-                for (bp in bParts) {
-                    if (overlaps(ap.first, ap.second, bp.first, bp.second)) return false
-                }
+            for (ap in aParts) for (bp in bParts) {
+                if (overlaps(ap.first, ap.second, bp.first, bp.second)) return false
             }
         }
         return true
     }
 
     // ---------------------------
-    // Today CRUD (겹치면 false)
+    // Today CRUD
     // ---------------------------
     fun addTodayBlock(title: String, startMinute: Int, endMinute: Int, category: Category): Boolean {
-        if (!canPlace(todayBlocks, ignoreId = null, startMinute = startMinute, endMinute = endMinute)) return false
+        if (!canPlace(todayBlocks, null, startMinute, endMinute)) return false
         todayBlocks.add(TimeBlock(title = title, startMinute = startMinute, endMinute = endMinute, category = category))
         persistDebounced()
         return true
@@ -212,8 +313,7 @@ object ScheduleStore {
     fun updateTodayBlock(id: String, title: String, startMinute: Int, endMinute: Int, category: Category): Boolean {
         val idx = todayBlocks.indexOfFirst { it.id == id }
         if (idx < 0) return false
-        if (!canPlace(todayBlocks, ignoreId = id, startMinute = startMinute, endMinute = endMinute)) return false
-
+        if (!canPlace(todayBlocks, id, startMinute, endMinute)) return false
         val old = todayBlocks[idx]
         todayBlocks[idx] = old.copy(title = title, startMinute = startMinute, endMinute = endMinute, category = category)
         persistDebounced()
@@ -244,10 +344,10 @@ object ScheduleStore {
     }
 
     // ---------------------------
-    // Tomorrow CRUD (겹치면 false)
+    // Tomorrow CRUD
     // ---------------------------
     fun addTomorrowBlock(title: String, startMinute: Int, endMinute: Int, category: Category): Boolean {
-        if (!canPlace(tomorrowBlocks, ignoreId = null, startMinute = startMinute, endMinute = endMinute)) return false
+        if (!canPlace(tomorrowBlocks, null, startMinute, endMinute)) return false
         tomorrowBlocks.add(TimeBlock(title = title, startMinute = startMinute, endMinute = endMinute, category = category))
         persistDebounced()
         return true
@@ -256,8 +356,7 @@ object ScheduleStore {
     fun updateTomorrowBlock(id: String, title: String, startMinute: Int, endMinute: Int, category: Category): Boolean {
         val idx = tomorrowBlocks.indexOfFirst { it.id == id }
         if (idx < 0) return false
-        if (!canPlace(tomorrowBlocks, ignoreId = id, startMinute = startMinute, endMinute = endMinute)) return false
-
+        if (!canPlace(tomorrowBlocks, id, startMinute, endMinute)) return false
         val old = tomorrowBlocks[idx]
         tomorrowBlocks[idx] = old.copy(title = title, startMinute = startMinute, endMinute = endMinute, category = category)
         persistDebounced()

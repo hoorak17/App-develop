@@ -24,9 +24,10 @@ import com.example.plannermvp.data.formatRange
 
 private sealed interface DialogMode {
     data object AddNew : DialogMode
-    data class AddFromYesterday(val base: TimeBlock) : DialogMode
     data class EditTomorrow(val target: TimeBlock) : DialogMode
 }
+
+private enum class AddSourceTab { YESTERDAY, NEW, LOAD }
 
 @Composable
 fun PlanScreen(
@@ -36,8 +37,22 @@ fun PlanScreen(
     var showDialog by remember { mutableStateOf(false) }
     var dialogMode by remember { mutableStateOf<DialogMode>(DialogMode.AddNew) }
 
+    // ✅ 탭 순서/용어 = 어제일정 / 신규일정 / 불러오기
+    var tab by remember { mutableStateOf(AddSourceTab.YESTERDAY) }
+
     val yesterday = ScheduleStore.yesterdayBlocks.toList()
     val tomorrow = ScheduleStore.tomorrowBlocks.sortedBy { it.startMinute }
+
+    // ✅ 히스토리(불러오기)
+    val historyDates = remember { ScheduleStore.historyDayList(limit = 14) }
+    var selectedHistoryDate by remember { mutableStateOf(historyDates.firstOrNull()) }
+    val historyBlocks = remember(selectedHistoryDate) {
+        if (selectedHistoryDate == null) emptyList()
+        else ScheduleStore.blocksOfHistoryDay(selectedHistoryDate!!)
+    }
+
+    // 즉시 추가 실패 메시지(겹침 등)
+    var quickAddError by remember { mutableStateOf("") }
 
     Column(
         modifier = Modifier
@@ -57,9 +72,29 @@ fun PlanScreen(
                     onDone()
                 },
                 modifier = Modifier.weight(1f)
-            ) {
-                Text("완료(홈)")
-            }
+            ) { Text("완료(홈)") }
+        }
+
+        // 탭
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = { tab = AddSourceTab.YESTERDAY; quickAddError = "" },
+                modifier = Modifier.weight(1f)
+            ) { Text(if (tab == AddSourceTab.YESTERDAY) "[어제일정]" else "어제일정") }
+
+            OutlinedButton(
+                onClick = { tab = AddSourceTab.NEW; quickAddError = "" },
+                modifier = Modifier.weight(1f)
+            ) { Text(if (tab == AddSourceTab.NEW) "[신규일정]" else "신규일정") }
+
+            OutlinedButton(
+                onClick = { tab = AddSourceTab.LOAD; quickAddError = "" },
+                modifier = Modifier.weight(1f)
+            ) { Text(if (tab == AddSourceTab.LOAD) "[불러오기]" else "불러오기") }
+        }
+
+        if (quickAddError.isNotBlank()) {
+            Text(quickAddError)
         }
 
         LazyColumn(
@@ -68,25 +103,100 @@ fun PlanScreen(
                 .weight(1f),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text("어제 일정 (눌러서 시간 수정 후 추가)")
-                        if (yesterday.isEmpty()) {
-                            Text("어제 일정이 없습니다.")
-                        } else {
-                            yesterday.forEach { b ->
-                                OutlinedButton(
-                                    onClick = {
-                                        dialogMode = DialogMode.AddFromYesterday(b)
-                                        showDialog = true
-                                    },
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text("${b.title}  ${formatRange(b.startMinute, b.endMinute)}")
+            // -------------------------
+            // 추가 영역 (탭에 따라)
+            // -------------------------
+            when (tab) {
+                AddSourceTab.YESTERDAY -> {
+                    item {
+                        Card(modifier = Modifier.fillMaxWidth()) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text("어제일정 (누르면 즉시 추가)")
+                                if (yesterday.isEmpty()) {
+                                    Text("어제 일정이 없습니다.")
+                                } else {
+                                    yesterday.forEach { b ->
+                                        OutlinedButton(
+                                            onClick = {
+                                                quickAddError = ""
+                                                val ok = ScheduleStore.addTomorrowBlock(
+                                                    title = b.title,
+                                                    startMinute = b.startMinute,
+                                                    endMinute = b.endMinute,
+                                                    category = b.category
+                                                )
+                                                if (!ok) quickAddError = "추가 실패: 다른 일정과 시간이 겹칩니다."
+                                            },
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Text("${b.title}  ${formatRange(b.startMinute, b.endMinute)}")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                AddSourceTab.NEW -> {
+                    item {
+                        Button(
+                            onClick = {
+                                dialogMode = DialogMode.AddNew
+                                showDialog = true
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("새 일정 만들기") }
+                    }
+                }
+
+                AddSourceTab.LOAD -> {
+                    item {
+                        Card(modifier = Modifier.fillMaxWidth()) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text("불러오기 (날짜 선택 → 일정 누르면 즉시 추가)")
+
+                                if (historyDates.isEmpty()) {
+                                    Text("히스토리가 없습니다. 홈→요약→계획 흐름을 한 번 거치면 누적됩니다.")
+                                } else {
+                                    // 날짜 선택 버튼들
+                                    historyDates.forEach { d ->
+                                        OutlinedButton(
+                                            onClick = { selectedHistoryDate = d },
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) { Text(if (d == selectedHistoryDate) "[$d]" else d) }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text("선택 날짜: ${selectedHistoryDate ?: "-"}")
+
+                                    if (historyBlocks.isEmpty()) {
+                                        Text("선택 날짜에 일정이 없습니다.")
+                                    } else {
+                                        historyBlocks.forEach { b ->
+                                            OutlinedButton(
+                                                onClick = {
+                                                    quickAddError = ""
+                                                    val ok = ScheduleStore.addTomorrowBlock(
+                                                        title = b.title,
+                                                        startMinute = b.startMinute,
+                                                        endMinute = b.endMinute,
+                                                        category = b.category
+                                                    )
+                                                    if (!ok) quickAddError = "추가 실패: 다른 일정과 시간이 겹칩니다."
+                                                },
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Text("${b.title}  ${formatRange(b.startMinute, b.endMinute)}")
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -94,28 +204,17 @@ fun PlanScreen(
                 }
             }
 
-            item {
-                Button(
-                    onClick = {
-                        dialogMode = DialogMode.AddNew
-                        showDialog = true
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("새 일정 만들기") }
-            }
-
+            // -------------------------
+            // 내일 일정 목록
+            // -------------------------
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text("내일 일정 (홈으로 가기 전까지 수정/삭제 가능)")
-                        if (tomorrow.isEmpty()) {
-                            Text("아직 없음")
-                        } else {
-                            Spacer(modifier = Modifier.height(4.dp))
-                        }
+                        Text("내일 일정 (수정/삭제 가능)")
+                        if (tomorrow.isEmpty()) Text("아직 없음")
                     }
                 }
             }
@@ -138,9 +237,7 @@ fun PlanScreen(
                             ) { Text("수정") }
 
                             OutlinedButton(
-                                onClick = {
-                                    ScheduleStore.deleteTomorrowBlock(b.id)
-                                },
+                                onClick = { ScheduleStore.deleteTomorrowBlock(b.id) },
                                 modifier = Modifier.weight(1f)
                             ) { Text("삭제") }
                         }
@@ -150,17 +247,18 @@ fun PlanScreen(
         }
     }
 
+    // -------------------------
+    // 다이얼 (신규/수정)
+    // -------------------------
     if (showDialog) {
         val (titleDefault, startDefault, endDefault) = when (val m = dialogMode) {
             DialogMode.AddNew -> Triple("", 9 * 60, 10 * 60)
-            is DialogMode.AddFromYesterday -> Triple(m.base.title, m.base.startMinute, m.base.endMinute)
             is DialogMode.EditTomorrow -> Triple(m.target.title, m.target.startMinute, m.target.endMinute)
         }
 
         WheelTimeDialog(
             title = when (dialogMode) {
                 DialogMode.AddNew -> "일정 추가"
-                is DialogMode.AddFromYesterday -> "어제 일정 추가"
                 is DialogMode.EditTomorrow -> "일정 수정"
             },
             titleDefault = titleDefault,
@@ -175,14 +273,6 @@ fun PlanScreen(
                             startMinute = s,
                             endMinute = e,
                             category = guessCategory(t)
-                        )
-                    }
-                    is DialogMode.AddFromYesterday -> {
-                        ScheduleStore.addTomorrowBlock(
-                            title = t,
-                            startMinute = s,
-                            endMinute = e,
-                            category = m.base.category
                         )
                     }
                     is DialogMode.EditTomorrow -> {

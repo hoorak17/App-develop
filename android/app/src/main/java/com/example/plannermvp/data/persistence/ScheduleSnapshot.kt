@@ -1,47 +1,21 @@
 package com.example.plannermvp.data.persistence
 
-import com.example.plannermvp.data.Category
 import com.example.plannermvp.data.TimeBlock
-import kotlinx.serialization.Serializable
 
-@Serializable
-data class TimeBlockDto(
-    val id: String,
-    val title: String,
-    val startMinute: Int,
-    val endMinute: Int,
-    val category: Category,
-    val feedbackTags: Set<String>,
-    val feedbackMemo: String
-) {
-    fun toDomain(): TimeBlock = TimeBlock(
-        id = id,
-        title = title,
-        startMinute = startMinute,
-        endMinute = endMinute,
-        category = category,
-        feedbackTags = feedbackTags,
-        feedbackMemo = feedbackMemo
-    )
-
-    companion object {
-        fun fromDomain(b: TimeBlock): TimeBlockDto =
-            TimeBlockDto(
-                id = b.id,
-                title = b.title,
-                startMinute = b.startMinute,
-                endMinute = b.endMinute,
-                category = b.category,
-                feedbackTags = b.feedbackTags,
-                feedbackMemo = b.feedbackMemo
-            )
-    }
-}
-
-@Serializable
+/**
+ * ✅ 저장/로드용 스냅샷
+ * - DTO 분리 안 함
+ * - TimeBlock(도메인)을 그대로 담되, 실제 저장은 ScheduleDataStore의 Codec이 문자열로 직렬화함
+ */
 data class ScheduleSnapshot(
-    val schemaVersion: Int = 1,
-    val today: List<TimeBlockDto>,
-    val yesterday: List<TimeBlockDto>,
-    val tomorrow: List<TimeBlockDto>
-)
+    val schemaVersion: Int = 3,
+    val today: List<TimeBlock> = emptyList(),
+    val yesterday: List<TimeBlock> = emptyList(),
+    val tomorrow: List<TimeBlock> = emptyList(),
+    val history: List<HistoryDay> = emptyList()
+) {
+    data class HistoryDay(
+        val dateIso: String = "",
+        val blocks: List<TimeBlock> = emptyList()
+    )
+}
