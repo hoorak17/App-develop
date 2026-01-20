@@ -33,18 +33,29 @@ object ScheduleStore {
     private var seededOnce = false
 
     // ---------------------------
+    // UX flags (UI에서 읽기만)
+    // ---------------------------
+    private val _pendingRollover = mutableStateOf(false)
+    val pendingRollover: Boolean get() = _pendingRollover.value
+
+    private val _pendingFromDateIso = mutableStateOf("")
+    val pendingFromDateIso: String get() = _pendingFromDateIso.value
+
+    /** 홈 배너: 계획 비어있음 */
+    fun isPlanMissing(): Boolean = tomorrowBlocks.isEmpty()
+
+    /** 내부 기준 날짜(사용자에게 노출 금지) */
+    private var lastActiveDateIso: String = LocalDate.now().toString()
+
+    // ---------------------------
     // Dev Mode (시간/날짜 시뮬레이션)
     // ---------------------------
     private val _devMode = mutableStateOf(false)
     val devMode: Boolean get() = _devMode.value
 
     private var devBaseRealNow: LocalDateTime? = null
-
-    // ✅ Compose가 관찰 가능하도록 state로 승격
-    private val _devOffsetMinutes = mutableStateOf(0L)
-    private val _devOffsetDays = mutableStateOf(0L)
-    val devOffsetMinutes: Long get() = _devOffsetMinutes.value
-    val devOffsetDays: Long get() = _devOffsetDays.value
+    private var devOffsetMinutes: Long = 0L
+    private var devOffsetDays: Long = 0L
 
     private var snapshotBeforeDev: ScheduleSnapshot? = null
 
@@ -64,32 +75,30 @@ object ScheduleStore {
 
     fun toggleDevMode() {
         if (!devMode) {
-            snapshotBeforeDev = buildSnapshot(schemaVersion = 3)
+            snapshotBeforeDev = buildSnapshot(schemaVersion = 4)
             devBaseRealNow = LocalDateTime.now()
-            _devOffsetMinutes.value = 0L
-            _devOffsetDays.value = 0L
+            devOffsetMinutes = 0L
+            devOffsetDays = 0L
             _devMode.value = true
         } else {
             snapshotBeforeDev?.let { applySnapshotToState(it) }
             snapshotBeforeDev = null
             devBaseRealNow = null
-            _devOffsetMinutes.value = 0L
-            _devOffsetDays.value = 0L
+            devOffsetMinutes = 0L
+            devOffsetDays = 0L
             _devMode.value = false
-
-            // dev OFF 후 실사용 상태 저장
             persistDebounced()
         }
     }
 
     fun devAdjustMinutes(deltaMinutes: Int) {
         if (!devMode) return
-        _devOffsetMinutes.value = _devOffsetMinutes.value + deltaMinutes.toLong()
+        devOffsetMinutes += deltaMinutes.toLong()
     }
 
     fun devAdjustDays(deltaDays: Int) {
         if (!devMode) return
-        _devOffsetDays.value = _devOffsetDays.value + deltaDays.toLong()
+        devOffsetDays += deltaDays.toLong()
     }
 
     // ---------------------------
@@ -109,9 +118,13 @@ object ScheduleStore {
             if (snap != null) {
                 withContext(Dispatchers.Main) { applySnapshotToState(snap) }
                 loadedOnce = true
+                withContext(Dispatchers.Main) { checkRolloverOnAppOpen() }
             } else {
                 withContext(Dispatchers.Main) { seedIfNeeded() }
                 loadedOnce = true
+                lastActiveDateIso = LocalDate.now().toString()
+                _pendingRollover.value = false
+                _pendingFromDateIso.value = ""
                 persistDebounced()
             }
         }
@@ -124,8 +137,8 @@ object ScheduleStore {
 
         saveJob?.cancel()
         saveJob = ioScope.launch {
-            delay(600)
-            ScheduleDataStore.save(ctx, buildSnapshot(schemaVersion = 3))
+            delay(400)
+            ScheduleDataStore.save(ctx, buildSnapshot(schemaVersion = 4))
         }
     }
 
@@ -140,7 +153,10 @@ object ScheduleStore {
                     dateIso = day.dateIso,
                     blocks = day.blocks.map { it.copy() }
                 )
-            }
+            },
+            lastActiveDateIso = lastActiveDateIso,
+            pendingRollover = _pendingRollover.value,
+            pendingFromDateIso = _pendingFromDateIso.value
         )
     }
 
@@ -162,38 +178,10 @@ object ScheduleStore {
                 )
             }
         )
-    }
 
-    // ---------------------------
-    // Reset (전체 초기화)
-    // ---------------------------
-    fun resetAllToDefault() {
-        val ctx = appContext ?: return
-
-        // dev 모드 강제 종료(롤백 상태 자체가 무의미해지므로)
-        snapshotBeforeDev = null
-        devBaseRealNow = null
-        _devOffsetMinutes.value = 0L
-        _devOffsetDays.value = 0L
-        _devMode.value = false
-
-        // 저장 데이터 삭제 + 상태 초기화
-        ioScope.launch {
-            ScheduleDataStore.clear(ctx)
-        }
-
-        todayBlocks.clear()
-        yesterdayBlocks.clear()
-        tomorrowBlocks.clear()
-        historyDays.clear()
-
-        // 기본 seed 다시 주입
-        seededOnce = false
-        seedIfNeeded()
-
-        // 이후 저장 재개
-        loadedOnce = true
-        persistDebounced()
+        lastActiveDateIso = snap.lastActiveDateIso.ifBlank { LocalDate.now().toString() }
+        _pendingRollover.value = snap.pendingRollover
+        _pendingFromDateIso.value = snap.pendingFromDateIso
     }
 
     // ---------------------------
@@ -224,11 +212,16 @@ object ScheduleStore {
         }
     }
 
-    private fun archiveTodayToHistory() {
-        if (devMode) return
-        val todayIso = LocalDate.now().toString()
+    private const val TAG_UNRECORDED = "미입력"
+
+    private fun archiveTodayToHistoryWithUnrecordedTag(dateIso: String) {
         if (todayBlocks.isEmpty()) return
-        upsertHistoryDay(todayIso, todayBlocks.toList())
+        val archived = todayBlocks.map { b ->
+            val hasFb = b.feedbackTags.isNotEmpty() || b.feedbackMemo.isNotBlank()
+            if (hasFb) b.copy()
+            else b.copy(feedbackTags = setOf(TAG_UNRECORDED), feedbackMemo = "")
+        }
+        upsertHistoryDay(dateIso, archived)
     }
 
     fun historyForTitle(title: String, limit: Int = 10): List<HistoryItem> {
@@ -277,10 +270,103 @@ object ScheduleStore {
     }
 
     // ---------------------------
+    // Rollover (자동 감지: 사용자 선택 대기)
+    // ---------------------------
+    fun checkRolloverOnAppOpen() {
+        if (devMode) return
+        val todayIso = LocalDate.now().toString()
+        if (todayIso == lastActiveDateIso) {
+            _pendingRollover.value = false
+            _pendingFromDateIso.value = ""
+            return
+        }
+
+        _pendingRollover.value = true
+        _pendingFromDateIso.value = lastActiveDateIso
+        persistDebounced()
+    }
+
+    fun confirmRolloverSkip() {
+        if (devMode) return
+        if (!_pendingRollover.value) return
+
+        val fromIso = _pendingFromDateIso.value.ifBlank { lastActiveDateIso }
+        archiveTodayToHistoryWithUnrecordedTag(fromIso)
+
+        yesterdayBlocks.clear()
+        yesterdayBlocks.addAll(todayBlocks.map { it.copy() })
+
+        todayBlocks.clear()
+        todayBlocks.addAll(tomorrowBlocks.map { it.copy(feedbackTags = emptySet(), feedbackMemo = "") })
+
+        tomorrowBlocks.clear()
+
+        lastActiveDateIso = LocalDate.now().toString()
+        _pendingRollover.value = false
+        _pendingFromDateIso.value = ""
+
+        persistDebounced()
+    }
+
+    fun keepRolloverPending() {
+        // intentionally no-op
+    }
+
+    // ---------------------------
+    // Manual force close (SummaryScreen에서 호출)
+    // ---------------------------
+    sealed interface RolloverResult {
+        data object Done : RolloverResult
+        data object RequirePlan : RolloverResult
+    }
+
+    /**
+     * ✅ 사용자가 "오늘 강제 종료"를 눌렀을 때:
+     * - 내부 기준 날짜(lastActiveDateIso)로 todayBlocks를 history에 확정 (피드백 없으면 "미입력")
+     * - yesterday <- today
+     * - today <- tomorrow (없으면 빈)
+     * - tomorrow 비움
+     * - 내부 날짜 +1 (연속 강제 종료도 안정)
+     * - 다음 today가 비면 RequirePlan 반환
+     */
+    fun manualForceCloseToday(): RolloverResult {
+        if (!loadedOnce) return RolloverResult.Done
+        if (devMode) return RolloverResult.Done
+
+        val fromIso = lastActiveDateIso.ifBlank { LocalDate.now().toString() }
+        archiveTodayToHistoryWithUnrecordedTag(fromIso)
+
+        yesterdayBlocks.clear()
+        yesterdayBlocks.addAll(todayBlocks.map { it.copy() })
+
+        val nextToday = tomorrowBlocks.map { it.copy(feedbackTags = emptySet(), feedbackMemo = "") }
+        todayBlocks.clear()
+        todayBlocks.addAll(nextToday)
+
+        tomorrowBlocks.clear()
+
+        _pendingRollover.value = false
+        _pendingFromDateIso.value = ""
+
+        lastActiveDateIso = runCatching {
+            LocalDate.parse(fromIso).plusDays(1).toString()
+        }.getOrElse {
+            LocalDate.now().plusDays(1).toString()
+        }
+
+        persistDebounced()
+
+        return if (todayBlocks.isEmpty()) RolloverResult.RequirePlan else RolloverResult.Done
+    }
+
+    // ---------------------------
     // Planning flow
     // ---------------------------
     fun preparePlanningNextDay() {
-        archiveTodayToHistory()
+        val todayIso = LocalDate.now().toString()
+        if (!devMode && todayBlocks.isNotEmpty()) {
+            upsertHistoryDay(todayIso, todayBlocks.toList())
+        }
 
         yesterdayBlocks.clear()
         yesterdayBlocks.addAll(todayBlocks.map { it.copy() })
@@ -413,6 +499,31 @@ object ScheduleStore {
             Category.EXERCISE -> listOf("고강도", "유산소", "근력", "컨디션저하", "만족")
             Category.STUDY -> listOf("집중", "산만", "진도OK", "막힘", "복습필요")
             Category.ETC -> listOf("GOOD", "OKAY", "BAD", "FAIL")
+        }
+    }
+
+    // ---------------------------
+    // Reset (Dev mode에서만 노출 권장)
+    // ---------------------------
+    fun resetAll() {
+        val ctx = appContext ?: return
+        ioScope.launch {
+            ScheduleDataStore.clearAll(ctx)
+            withContext(Dispatchers.Main) {
+                todayBlocks.clear()
+                yesterdayBlocks.clear()
+                tomorrowBlocks.clear()
+                historyDays.clear()
+
+                seededOnce = false
+                seedIfNeeded()
+
+                lastActiveDateIso = LocalDate.now().toString()
+                _pendingRollover.value = false
+                _pendingFromDateIso.value = ""
+
+                persistDebounced()
+            }
         }
     }
 }

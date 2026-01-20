@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -23,12 +24,12 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.plannermvp.data.Category
@@ -37,26 +38,16 @@ import com.example.plannermvp.data.TimeBlock
 import com.example.plannermvp.data.formatRange
 import com.example.plannermvp.data.toHHMM
 import com.example.plannermvp.feature.plan.WheelTimeDialog
-import kotlinx.coroutines.delay
 import java.time.LocalDate
-import java.time.format.DateTimeFormatter
+import java.time.LocalDateTime
 
 private const val DAY_MIN = 24 * 60
 private const val GAP_UNIT_MIN = 60
-
-private val ROW_HEIGHT = 76.dp
-private val MARKER_HEIGHT = 28.dp
+private val ROW_MIN_HEIGHT = 76.dp
 
 sealed interface TimelineItem {
-    data class BlockPart(
-        val block: TimeBlock,
-        val partStart: Int,
-        val partEnd: Int,
-        val isContinuation: Boolean
-    ) : TimelineItem
-
+    data class Block(val block: TimeBlock) : TimelineItem
     data class Gap(val start: Int, val end: Int) : TimelineItem
-    data class TimeMarker(val minute: Int) : TimelineItem
 }
 
 private fun formatKoreanDate(d: LocalDate): String {
@@ -72,12 +63,12 @@ private fun formatKoreanDate(d: LocalDate): String {
     return "${d.monthValue}월 ${d.dayOfMonth}일 ${dow}요일"
 }
 
+private fun formatHHMM(dt: LocalDateTime): String = "%02d:%02d".format(dt.hour, dt.minute)
+
 private val PastIvory = Color(0xFFF3E9D6)
 private val FutureSky = Color(0xFFD7EFFF)
 private val GapGray = Color(0xFFE6E6E6)
 private val NowIndicator = Color(0xFF2B6CB0)
-private val MarkerGray = Color(0xFFF2F2F2)
-private val MarkerText = Color(0xFF666666)
 
 private enum class BlockStatus { PAST, NOW, FUTURE }
 
@@ -120,21 +111,26 @@ private fun statusOfBlock(nowMin: Int, start: Int, end: Int): BlockStatus {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
-    onGoSummary: () -> Unit
+    onGoSummary: () -> Unit,
+    onGoPlan: () -> Unit
 ) {
-    // ✅ 진행/시간 표시 자동 갱신 (가상시계에도 적용)
-    var tick by remember { mutableStateOf(0) }
+    val ctx = LocalContext.current
+
+    // ✅ 빈 일정표 문제 방지: 홈에서 안전하게 init 호출(이미 init되어 있으면 no-op)
     LaunchedEffect(Unit) {
-        while (true) {
-            delay(30_000)
-            tick++
+        ScheduleStore.initPersistence(ctx)
+    }
+
+    // ✅ 앱 오픈 시 날짜 전환 체크(복귀/재진입 포함)
+    LaunchedEffect(ScheduleStore.devMode) {
+        if (!ScheduleStore.devMode) {
+            ScheduleStore.checkRolloverOnAppOpen()
         }
     }
 
-    val nowDateTime = ScheduleStore.nowDateTime() // devOffset state 읽힘
+    val nowDateTime = ScheduleStore.nowDateTime()
     val nowDate = nowDateTime.toLocalDate()
     val todayDateText = remember(nowDate) { formatKoreanDate(nowDate) }
-    val nowMin = ScheduleStore.nowMinuteOfDay()
 
     var selectedBlock by remember { mutableStateOf<TimeBlock?>(null) }
     var showFeedbackSheet by remember { mutableStateOf(false) }
@@ -150,22 +146,52 @@ fun HomeScreen(
 
     var showEditDialog by remember { mutableStateOf(false) }
 
-    // ✅ 절대 remember로 굳히지 말 것: 상태 리스트가 바뀌면 즉시 재계산되어야 함
     val blocks = ScheduleStore.todayBlocks.sortedBy { it.startMinute }
-    val timelineItems = buildTimelineItems(blocks, includeMarkers = ScheduleStore.devMode)
+    val items = remember(blocks) { buildTimelineItems(blocks) }
+    val nowMin = ScheduleStore.nowMinuteOfDay()
 
-    // ✅ 전체 초기화 확인 다이얼
-    var showResetConfirm by remember { mutableStateOf(false) }
+    // ✅ reset 2회 경고(Dev 모드에서만 버튼 노출)
+    var askReset1 by remember { mutableStateOf(false) }
+    var askReset2 by remember { mutableStateOf(false) }
+
+    // ✅ 날짜 전환 팝업(가볍게)
+    val pendingRollover = ScheduleStore.pendingRollover
+    val pendingFromIso = ScheduleStore.pendingFromDateIso
+
+    if (pendingRollover && !ScheduleStore.devMode) {
+        AlertDialog(
+            onDismissRequest = { /* 사용자가 명시적으로 결정하게 두기 */ },
+            title = { Text("어제 기록이 남아 있어요") },
+            text = { Text("어제 기록을 마무리할까요?") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        ScheduleStore.keepRolloverPending()
+                        onGoSummary()
+                    }
+                ) { Text("마무리") }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = {
+                        ScheduleStore.confirmRolloverSkip()
+                        // ✅ 넘긴 뒤에는 홈 유지(Plan으로 튀지 않음)
+                    }
+                ) { Text("넘기기") }
+            }
+        )
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
 
+            // ✅ 상단: 날짜 + 일정 개수만
             Card(
                 modifier = Modifier
                     .weight(1f)
                     .combinedClickable(
-                        onClick = { /* hidden */ },
+                        onClick = { /* no-op */ },
                         onLongClick = { ScheduleStore.toggleDevMode() }
                     )
             ) {
@@ -177,88 +203,91 @@ fun HomeScreen(
                 ) {
                     Text(todayDateText)
                     Text("일정 ${blocks.size}개")
-
-                    if (ScheduleStore.devMode) {
-                        val fmt = remember { DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm") }
-                        Text("DEV: ${ScheduleStore.nowDateTime().format(fmt)}")
-                    }
                 }
             }
 
             Button(onClick = onGoSummary) { Text("오늘 요약") }
         }
 
+        // ✅ 계획이 비어 있으면: 강제 이동 금지, 배너로만 안내
+        if (!ScheduleStore.devMode && ScheduleStore.isPlanMissing()) {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "계획이 비어 있어요",
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    OutlinedButton(onClick = onGoPlan) { Text("계획 세우기") }
+                }
+            }
+        }
+
+        // ✅ Dev 모드 UI: 설명 문구 제거 / 가상시각만 표시
         if (ScheduleStore.devMode) {
+            val devNow = ScheduleStore.nowDateTime()
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("시간 조정")
+                    Text("${formatKoreanDate(devNow.toLocalDate())}  ${formatHHMM(devNow)}")
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        OutlinedButton(
-                            onClick = { ScheduleStore.devAdjustMinutes(-60) },
-                            modifier = Modifier.weight(1f)
-                        ) { OneLineText("-1h") }
-
-                        OutlinedButton(
-                            onClick = { ScheduleStore.devAdjustMinutes(+60) },
-                            modifier = Modifier.weight(1f)
-                        ) { OneLineText("+1h") }
+                        OutlinedButton(onClick = { ScheduleStore.devAdjustMinutes(-60) }, modifier = Modifier.weight(1f)) {
+                            OneLineText("-1h")
+                        }
+                        OutlinedButton(onClick = { ScheduleStore.devAdjustMinutes(+60) }, modifier = Modifier.weight(1f)) {
+                            OneLineText("+1h")
+                        }
                     }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        OutlinedButton(
-                            onClick = { ScheduleStore.devAdjustMinutes(-10) },
-                            modifier = Modifier.weight(1f)
-                        ) { OneLineText("-10m") }
-
-                        OutlinedButton(
-                            onClick = { ScheduleStore.devAdjustMinutes(+10) },
-                            modifier = Modifier.weight(1f)
-                        ) { OneLineText("+10m") }
+                        OutlinedButton(onClick = { ScheduleStore.devAdjustMinutes(-10) }, modifier = Modifier.weight(1f)) {
+                            OneLineText("-10m")
+                        }
+                        OutlinedButton(onClick = { ScheduleStore.devAdjustMinutes(+10) }, modifier = Modifier.weight(1f)) {
+                            OneLineText("+10m")
+                        }
                     }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        OutlinedButton(
-                            onClick = { ScheduleStore.devAdjustDays(-1) },
-                            modifier = Modifier.weight(1f)
-                        ) { OneLineText("-1d") }
-
-                        OutlinedButton(
-                            onClick = { ScheduleStore.devAdjustDays(+1) },
-                            modifier = Modifier.weight(1f)
-                        ) { OneLineText("+1d") }
+                        OutlinedButton(onClick = { ScheduleStore.devAdjustDays(-1) }, modifier = Modifier.weight(1f)) {
+                            OneLineText("-1d")
+                        }
+                        OutlinedButton(onClick = { ScheduleStore.devAdjustDays(+1) }, modifier = Modifier.weight(1f)) {
+                            OneLineText("+1d")
+                        }
                     }
 
-                    // ✅ 전체 초기화 버튼(Dev 모드에서만 노출)
                     OutlinedButton(
-                        onClick = { showResetConfirm = true },
+                        onClick = { askReset1 = true },
                         modifier = Modifier.fillMaxWidth()
-                    ) { Text("모든 기록 초기화하고 기본으로 되돌리기") }
-
-                    Text("Dev 모드 종료(롤백): 상단 날짜 카드 롱프레스")
+                    ) { Text("전체 초기화") }
                 }
             }
         }
 
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(
-                items = timelineItems,
-                key = { it.timelineKey() } // ✅ 즉시 갱신 안정화 핵심
-            ) { item ->
+            items(items = items, key = {
+                when (it) {
+                    is TimelineItem.Block -> it.block.id
+                    is TimelineItem.Gap -> "gap_${it.start}_${it.end}"
+                }
+            }) { item ->
                 when (item) {
-                    is TimelineItem.TimeMarker -> TimeMarkerRow(minute = item.minute, nowMin = nowMin)
-
-                    is TimelineItem.BlockPart -> {
+                    is TimelineItem.Block -> {
                         val b = item.block
                         val status = statusOfBlock(nowMin, b.startMinute, b.endMinute)
-                        val progress = if (status == BlockStatus.NOW) progressOfBlock(nowMin, b.startMinute, b.endMinute) else 0f
+                        val progress =
+                            if (status == BlockStatus.NOW) progressOfBlock(nowMin, b.startMinute, b.endMinute) else 0f
 
                         BlockCard(
                             block = b,
-                            isContinuation = item.isContinuation,
                             status = status,
                             progress = progress,
                             onClick = {
@@ -272,33 +301,46 @@ fun HomeScreen(
                         )
                     }
 
-                    is TimelineItem.Gap -> GapCard(
-                        start = item.start,
-                        end = item.end,
-                        onClick = {
-                            addStart = item.start
-                            addEnd = (item.start + 60).coerceAtMost(item.end)
-                            showAddDialog = true
-                        }
-                    )
+                    is TimelineItem.Gap -> {
+                        GapCard(
+                            start = item.start,
+                            end = item.end,
+                            onClick = {
+                                addStart = item.start
+                                addEnd = (item.start + 60).coerceAtMost(item.end)
+                                showAddDialog = true
+                            }
+                        )
+                    }
                 }
             }
         }
     }
 
-    if (showResetConfirm) {
+    // ✅ reset 경고 2회
+    if (askReset1) {
         AlertDialog(
-            onDismissRequest = { showResetConfirm = false },
+            onDismissRequest = { askReset1 = false },
             title = { Text("전체 초기화") },
-            text = { Text("모든 기록(오늘/어제/내일/히스토리/저장 데이터)을 삭제하고 기본 일정으로 되돌립니다. 진행하시겠습니까?") },
+            text = { Text("모든 기록이 삭제됩니다.") },
             confirmButton = {
-                Button(onClick = {
-                    ScheduleStore.resetAllToDefault()
-                    showResetConfirm = false
-                }) { Text("초기화") }
+                Button(onClick = { askReset1 = false; askReset2 = true }) { Text("계속") }
             },
             dismissButton = {
-                OutlinedButton(onClick = { showResetConfirm = false }) { Text("취소") }
+                OutlinedButton(onClick = { askReset1 = false }) { Text("취소") }
+            }
+        )
+    }
+    if (askReset2) {
+        AlertDialog(
+            onDismissRequest = { askReset2 = false },
+            title = { Text("정말 초기화할까요?") },
+            text = { Text("되돌릴 수 없습니다.") },
+            confirmButton = {
+                Button(onClick = { askReset2 = false; ScheduleStore.resetAll() }) { Text("초기화") }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { askReset2 = false }) { Text("취소") }
             }
         )
     }
@@ -326,9 +368,7 @@ fun HomeScreen(
             onDismissRequest = { showFeedbackSheet = false },
             sheetState = feedbackSheetState
         ) {
-            // ✅ 항상 최신 상태 재조회
             val latest = ScheduleStore.todayBlocks.firstOrNull { it.id == selectedBlock!!.id } ?: selectedBlock!!
-
             FeedbackSheet(
                 block = latest,
                 onSave = { tags, memo ->
@@ -395,40 +435,9 @@ fun HomeScreen(
     }
 }
 
-private fun TimelineItem.timelineKey(): String = when (this) {
-    is TimelineItem.TimeMarker -> "m_${minute}"
-    is TimelineItem.Gap -> "g_${start}_${end}"
-    is TimelineItem.BlockPart -> "b_${block.id}_${partStart}_${partEnd}_${isContinuation}"
-}
-
-@Composable
-private fun TimeMarkerRow(minute: Int, nowMin: Int) {
-    val isCurrentHour = (nowMin / 60) == (minute / 60)
-
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(MARKER_HEIGHT),
-        color = MarkerGray
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(text = minute.toHHMM(), color = MarkerText, maxLines = 1)
-            if (isCurrentHour) {
-                Text(text = "NOW ${nowMin.toHHMM()}", color = MarkerText, maxLines = 1)
-            }
-        }
-    }
-}
-
 @Composable
 private fun BlockCard(
     block: TimeBlock,
-    isContinuation: Boolean,
     status: BlockStatus,
     progress: Float,
     onClick: () -> Unit,
@@ -440,24 +449,22 @@ private fun BlockCard(
         BlockStatus.NOW -> FutureSky
     }
 
-    // ✅ 피드백/메모 즉시 표시(있을 때만)
+    // ✅ 피드백/메모는 "있을 때만" 한 줄 표시 + 카드 높이 자동 증가
     val hasFb = block.feedbackTags.isNotEmpty() || block.feedbackMemo.isNotBlank()
     val tagsText = if (block.feedbackTags.isEmpty()) "" else block.feedbackTags.joinToString(", ")
     val memoText = block.feedbackMemo.trim()
 
     val fbSummary = when {
-        tagsText.isNotBlank() && memoText.isNotBlank() -> "피드백: $tagsText | 메모: $memoText"
-        tagsText.isNotBlank() -> "피드백: $tagsText"
-        memoText.isNotBlank() -> "메모: $memoText"
+        tagsText.isNotBlank() && memoText.isNotBlank() -> "$tagsText | $memoText"
+        tagsText.isNotBlank() -> tagsText
+        memoText.isNotBlank() -> memoText
         else -> ""
     }
-
-    val titleText = if (isContinuation) "↪ ${block.title}" else block.title
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .height(ROW_HEIGHT)
+            .heightIn(min = ROW_MIN_HEIGHT)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
     ) {
         Box(modifier = Modifier.fillMaxSize().background(baseColor)) {
@@ -484,11 +491,11 @@ private fun BlockCard(
                 }
 
                 Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(text = titleText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(text = formatRange(block.startMinute, block.endMinute), maxLines = 1)
+                    Text(block.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(formatRange(block.startMinute, block.endMinute), maxLines = 1, overflow = TextOverflow.Clip)
 
                     if (hasFb) {
-                        Text(text = fbSummary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(fbSummary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -501,7 +508,7 @@ private fun GapCard(start: Int, end: Int, onClick: () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .height(ROW_HEIGHT)
+            .height(ROW_MIN_HEIGHT)
             .combinedClickable(onClick = onClick)
     ) {
         Column(
@@ -512,7 +519,7 @@ private fun GapCard(start: Int, end: Int, onClick: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             Text("${start.toHHMM()} - ${end.toHHMM()}", maxLines = 1)
-            Text("빈 시간 (눌러서 추가)", maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("빈 시간", maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -583,86 +590,20 @@ private fun OneLineText(s: String) {
     Text(text = s, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
 }
 
-/**
- * ✅ 자정 넘김(endMinute>1440) 블록 처리 + (Dev 모드면) 시간 눈금 추가
- */
-private fun buildTimelineItems(blocks: List<TimeBlock>, includeMarkers: Boolean): List<TimelineItem> {
-    val parts = mutableListOf<TimelineItem.BlockPart>()
-
-    for (b in blocks) {
-        val start = b.startMinute.coerceIn(0, DAY_MIN)
-        val end = b.endMinute
-
-        if (end <= DAY_MIN) {
-            parts.add(
-                TimelineItem.BlockPart(
-                    block = b,
-                    partStart = start,
-                    partEnd = end.coerceIn(0, DAY_MIN),
-                    isContinuation = false
-                )
-            )
-        } else {
-            parts.add(
-                TimelineItem.BlockPart(
-                    block = b,
-                    partStart = start,
-                    partEnd = DAY_MIN,
-                    isContinuation = false
-                )
-            )
-            val e2 = end % DAY_MIN
-            if (e2 > 0) {
-                parts.add(
-                    TimelineItem.BlockPart(
-                        block = b,
-                        partStart = 0,
-                        partEnd = e2.coerceIn(0, DAY_MIN),
-                        isContinuation = true
-                    )
-                )
-            }
-        }
-    }
-
-    val sortedParts = parts.sortedBy { it.partStart }
+private fun buildTimelineItems(blocks: List<TimeBlock>): List<TimelineItem> {
     val result = mutableListOf<TimelineItem>()
     var cursor = 0
 
-    for (p in sortedParts) {
-        val s = p.partStart.coerceIn(0, DAY_MIN)
-        val e = p.partEnd.coerceIn(0, DAY_MIN)
+    for (b in blocks) {
+        val start = b.startMinute.coerceIn(0, DAY_MIN)
+        val end = b.endMinute.coerceAtMost(DAY_MIN)
 
-        if (s > cursor) addGaps(result, cursor, s)
-        result.add(p)
-        cursor = maxOf(cursor, e)
+        if (start > cursor) addGaps(result, cursor, start)
+        result.add(TimelineItem.Block(b))
+        cursor = maxOf(cursor, end)
     }
     if (cursor < DAY_MIN) addGaps(result, cursor, DAY_MIN)
-
-    if (!includeMarkers) return result
-
-    val markers = (0..23).map { h -> TimelineItem.TimeMarker(h * 60) }
-
-    return (result + markers).sortedWith { a, b ->
-        val ta = startKey(a)
-        val tb = startKey(b)
-        when {
-            ta != tb -> ta - tb
-            else -> typeRank(a) - typeRank(b) // marker 먼저
-        }
-    }
-}
-
-private fun startKey(item: TimelineItem): Int = when (item) {
-    is TimelineItem.TimeMarker -> item.minute
-    is TimelineItem.Gap -> item.start
-    is TimelineItem.BlockPart -> item.partStart
-}
-
-private fun typeRank(item: TimelineItem): Int = when (item) {
-    is TimelineItem.TimeMarker -> 0
-    is TimelineItem.Gap -> 1
-    is TimelineItem.BlockPart -> 2
+    return result
 }
 
 private fun addGaps(out: MutableList<TimelineItem>, start: Int, end: Int) {

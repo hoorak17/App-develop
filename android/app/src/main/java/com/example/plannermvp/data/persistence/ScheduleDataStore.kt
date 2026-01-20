@@ -10,7 +10,7 @@ import com.example.plannermvp.data.TimeBlock
 object ScheduleDataStore {
 
     private const val PREF_NAME = "planner_schedule"
-    private const val KEY_SNAPSHOT = "snapshot_v3"
+    private const val KEY_SNAPSHOT = "snapshot_v4"
 
     suspend fun save(context: Context, snapshot: ScheduleSnapshot) {
         val raw = SnapshotCodec.encode(snapshot)
@@ -28,11 +28,10 @@ object ScheduleDataStore {
         return runCatching { SnapshotCodec.decode(raw) }.getOrNull()
     }
 
-    /** ✅ 전체 기록 초기화(저장 데이터 삭제) */
-    suspend fun clear(context: Context) {
+    suspend fun clearAll(context: Context) {
         context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
             .edit()
-            .remove(KEY_SNAPSHOT)
+            .clear()
             .apply()
     }
 }
@@ -43,7 +42,6 @@ object ScheduleDataStore {
  */
 private object SnapshotCodec {
 
-    // section / row / block / field separator
     private const val SEP_SECTION = "␜"
     private const val SEP_ROW = "␞"
     private const val SEP_BLOCK = "␝"
@@ -52,9 +50,15 @@ private object SnapshotCodec {
     fun encode(s: ScheduleSnapshot): String {
         return buildString {
             append("v=").append(s.schemaVersion).append(SEP_SECTION)
+
             append("today=").append(encodeBlocks(s.today)).append(SEP_SECTION)
             append("yesterday=").append(encodeBlocks(s.yesterday)).append(SEP_SECTION)
             append("tomorrow=").append(encodeBlocks(s.tomorrow)).append(SEP_SECTION)
+
+            // v4 meta
+            append("lastActiveDateIso=").append(escape(s.lastActiveDateIso)).append(SEP_SECTION)
+            append("pendingRollover=").append(if (s.pendingRollover) "1" else "0").append(SEP_SECTION)
+            append("pendingFromDateIso=").append(escape(s.pendingFromDateIso)).append(SEP_SECTION)
 
             // history: dateIso ␟ blocksEncoded
             append("history=")
@@ -68,11 +72,16 @@ private object SnapshotCodec {
 
     fun decode(raw: String): ScheduleSnapshot {
         val parts = raw.split(SEP_SECTION)
-        var version = 3
+
+        var version = 4
         var today: List<TimeBlock> = emptyList()
         var yesterday: List<TimeBlock> = emptyList()
         var tomorrow: List<TimeBlock> = emptyList()
         var history: List<ScheduleSnapshot.HistoryDay> = emptyList()
+
+        var lastActiveDateIso = ""
+        var pendingRollover = false
+        var pendingFromDateIso = ""
 
         for (p in parts) {
             if (p.isBlank()) continue
@@ -82,10 +91,15 @@ private object SnapshotCodec {
             val value = p.substring(idx + 1)
 
             when (key) {
-                "v" -> version = value.toIntOrNull() ?: 3
+                "v" -> version = value.toIntOrNull() ?: 4
                 "today" -> today = decodeBlocks(value)
                 "yesterday" -> yesterday = decodeBlocks(value)
                 "tomorrow" -> tomorrow = decodeBlocks(value)
+
+                "lastActiveDateIso" -> lastActiveDateIso = unescape(value)
+                "pendingRollover" -> pendingRollover = value == "1"
+                "pendingFromDateIso" -> pendingFromDateIso = unescape(value)
+
                 "history" -> {
                     history = if (value.isBlank()) emptyList() else {
                         value.split(SEP_ROW).mapNotNull { row ->
@@ -103,12 +117,22 @@ private object SnapshotCodec {
             }
         }
 
+        // v3 이하 호환: lastActiveDateIso 없으면 오늘로 잡아주고 pending false
+        if (lastActiveDateIso.isBlank()) {
+            lastActiveDateIso = java.time.LocalDate.now().toString()
+            pendingRollover = false
+            pendingFromDateIso = ""
+        }
+
         return ScheduleSnapshot(
             schemaVersion = version,
             today = today,
             yesterday = yesterday,
             tomorrow = tomorrow,
-            history = history
+            history = history,
+            lastActiveDateIso = lastActiveDateIso,
+            pendingRollover = pendingRollover,
+            pendingFromDateIso = pendingFromDateIso
         )
     }
 
