@@ -43,13 +43,18 @@ fun PlanScreen(
     val yesterday = ScheduleStore.yesterdayBlocks.toList()
     val tomorrow = ScheduleStore.tomorrowBlocks.sortedBy { it.startMinute }
 
-    // ✅ 히스토리(불러오기)
-    val historyDates = remember { ScheduleStore.historyDayList(limit = 14) }
-    var selectedHistoryDate by remember { mutableStateOf(historyDates.firstOrNull()) }
-    val historyBlocks = remember(selectedHistoryDate) {
-        if (selectedHistoryDate == null) emptyList()
-        else ScheduleStore.blocksOfHistoryDay(selectedHistoryDate!!)
+    // ✅ (수정) remember로 고정하지 말고, stateList 변화에 반응하도록 매번 계산
+    val historyDates = ScheduleStore.historyDayList(limit = 14)
+    var selectedHistoryDate by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(historyDates) {
+        if (selectedHistoryDate == null || selectedHistoryDate !in historyDates) {
+            selectedHistoryDate = historyDates.firstOrNull()
+        }
     }
+
+    val historyBlocks = if (selectedHistoryDate == null) emptyList()
+    else ScheduleStore.blocksOfHistoryDay(selectedHistoryDate!!)
 
     // 즉시 추가 실패 메시지(겹침 등)
     var quickAddError by remember { mutableStateOf("") }

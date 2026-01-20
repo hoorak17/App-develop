@@ -36,7 +36,7 @@ fun WheelTimeDialog(
     /**
      * 저장을 실제로 수행하고 결과를 반환해야 함.
      * - true: 저장 성공(다이얼 닫기)
-     * - false: 저장 실패(이유는 호출자가 보여주기 위해 errorMessage에 넣거나, 아래 default 메시지 사용)
+     * - false: 저장 실패(겹침 등)
      */
     onTrySave: (title: String, startMin: Int, endMin: Int) -> Boolean,
     /**
@@ -139,10 +139,9 @@ fun WheelTimeDialog(
                             if (baseError.isNotBlank()) return@Button
                             val ok = onTrySave(name.trim(), rawStart, computedEnd)
                             if (!ok) {
-                                // 호출자가 false를 준 경우 = 대부분 겹침
                                 localError = "저장 실패: 다른 일정과 시간이 겹칩니다."
                             } else {
-                                onDismiss() // 성공이면 닫기
+                                onDismiss()
                             }
                         }
                     ) { Text("저장") }

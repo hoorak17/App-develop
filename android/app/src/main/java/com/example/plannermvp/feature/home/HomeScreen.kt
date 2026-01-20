@@ -1,5 +1,5 @@
 @file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
-//수정해야함!!!
+
 package com.example.plannermvp.feature.home
 
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -22,6 +22,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.*
@@ -35,17 +36,27 @@ import com.example.plannermvp.data.TimeBlock
 import com.example.plannermvp.data.formatRange
 import com.example.plannermvp.data.toHHMM
 import com.example.plannermvp.feature.plan.WheelTimeDialog
+import kotlinx.coroutines.delay
 import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 
 private const val DAY_MIN = 24 * 60
 private const val GAP_UNIT_MIN = 60
 
-// ✅ 고정 높이(모든 블록/빈칸 동일 사이즈)
 private val ROW_HEIGHT = 76.dp
+private val MARKER_HEIGHT = 28.dp
 
 sealed interface TimelineItem {
-    data class Block(val block: TimeBlock) : TimelineItem
+    data class BlockPart(
+        val block: TimeBlock,
+        val partStart: Int,
+        val partEnd: Int,
+        val isContinuation: Boolean
+    ) : TimelineItem
+
     data class Gap(val start: Int, val end: Int) : TimelineItem
+
+    data class TimeMarker(val minute: Int) : TimelineItem
 }
 
 private fun formatKoreanDate(d: LocalDate): String {
@@ -61,11 +72,12 @@ private fun formatKoreanDate(d: LocalDate): String {
     return "${d.monthValue}월 ${d.dayOfMonth}일 ${dow}요일"
 }
 
-// 색(단순 2톤 + 보조)
 private val PastIvory = Color(0xFFF3E9D6)
 private val FutureSky = Color(0xFFD7EFFF)
 private val GapGray = Color(0xFFE6E6E6)
-private val NowIndicator = Color(0xFF2B6CB0) // 진행중 표시용 진한색
+private val NowIndicator = Color(0xFF2B6CB0)
+private val MarkerGray = Color(0xFFF2F2F2)
+private val MarkerText = Color(0xFF666666)
 
 private enum class BlockStatus { PAST, NOW, FUTURE }
 
@@ -77,9 +89,7 @@ private fun progressOfBlock(nowMin: Int, start: Int, end: Int): Float {
     }
     val e2 = end % DAY_MIN
     return when {
-        nowMin >= start -> {
-            (nowMin - start).toFloat() / (DAY_MIN - start).toFloat()
-        }
+        nowMin >= start -> (nowMin - start).toFloat() / (DAY_MIN - start).toFloat()
         nowMin < e2 -> {
             val total = (DAY_MIN - start) + e2
             val passed = (DAY_MIN - start) + nowMin
@@ -112,8 +122,30 @@ private fun statusOfBlock(nowMin: Int, start: Int, end: Int): BlockStatus {
 fun HomeScreen(
     onGoSummary: () -> Unit
 ) {
-    val nowDate = ScheduleStore.nowDateTime().toLocalDate()
+    // ✅ 진행 표시 / 시간 표시를 자동 갱신
+    var tick by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(30_000)
+            tick++
+        }
+    }
+
+    // ✅ 핵심: todayBlocks를 "상태로 읽기" (toList()를 먼저 떠서 안정화)
+    val blocks: List<TimeBlock> = remember(ScheduleStore.todayBlocks, tick) {
+        // remember에 list 자체를 넣는 게 아니라, 아래처럼 toList()로 상태 읽기만 해도 recomposition 발생합니다.
+        ScheduleStore.todayBlocks.toList().sortedBy { it.startMinute }
+    }
+
+    val nowDateTime = ScheduleStore.nowDateTime()
+    val nowDate = nowDateTime.toLocalDate()
     val todayDateText = remember(nowDate) { formatKoreanDate(nowDate) }
+    val nowMin = ScheduleStore.nowMinuteOfDay()
+
+    // ✅ 핵심: items 캐시 금지(또는 derivedStateOf). 즉시 갱신 보장.
+    val timelineItems: List<TimelineItem> = remember(blocks, ScheduleStore.devMode) {
+        buildTimelineItems(blocks, includeMarkers = ScheduleStore.devMode)
+    }
 
     var selectedBlock by remember { mutableStateOf<TimeBlock?>(null) }
     var showFeedbackSheet by remember { mutableStateOf(false) }
@@ -129,15 +161,10 @@ fun HomeScreen(
 
     var showEditDialog by remember { mutableStateOf(false) }
 
-    val blocks = ScheduleStore.todayBlocks.sortedBy { it.startMinute }
-    val items = remember(blocks) { buildTimelineItems(blocks) }
-    val nowMin = ScheduleStore.nowMinuteOfDay()
-
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
 
-            // ✅ 상단 블럭: 날짜 + 줄바꿈 + 일정 개수
             Card(
                 modifier = Modifier
                     .weight(1f)
@@ -154,13 +181,17 @@ fun HomeScreen(
                 ) {
                     Text(todayDateText)
                     Text("일정 ${blocks.size}개")
+
+                    if (ScheduleStore.devMode) {
+                        val fmt = remember { DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm") }
+                        Text("DEV: ${ScheduleStore.nowDateTime().format(fmt)}")
+                    }
                 }
             }
 
             Button(onClick = onGoSummary) { Text("오늘 요약") }
         }
 
-        // ✅ 개발자 모드 UI: 버튼이 줄바꿈 안 되도록 2열 배치 + 텍스트 고정
         if (ScheduleStore.devMode) {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
@@ -211,15 +242,27 @@ fun HomeScreen(
         }
 
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(items) { item ->
+
+            // ✅ 핵심: 반드시 key 부여 (피드백/메모 즉시 반영 안정화)
+            items(
+                items = timelineItems,
+                key = { it.timelineKey() }
+            ) { item ->
                 when (item) {
-                    is TimelineItem.Block -> {
+                    is TimelineItem.TimeMarker -> {
+                        TimeMarkerRow(minute = item.minute, nowMin = nowMin)
+                    }
+
+                    is TimelineItem.BlockPart -> {
                         val b = item.block
                         val status = statusOfBlock(nowMin, b.startMinute, b.endMinute)
-                        val progress = if (status == BlockStatus.NOW) progressOfBlock(nowMin, b.startMinute, b.endMinute) else 0f
+                        val progress = if (status == BlockStatus.NOW) {
+                            progressOfBlock(nowMin, b.startMinute, b.endMinute)
+                        } else 0f
 
                         BlockCard(
                             block = b,
+                            isContinuation = item.isContinuation,
                             status = status,
                             progress = progress,
                             onClick = {
@@ -272,7 +315,7 @@ fun HomeScreen(
             onDismissRequest = { showFeedbackSheet = false },
             sheetState = feedbackSheetState
         ) {
-            // ✅ 저장 직후도 즉시 보이도록 최신 block을 다시 조회해서 Sheet에 반영
+            // ✅ 시트는 항상 최신 상태를 다시 조회
             val latest = ScheduleStore.todayBlocks.firstOrNull { it.id == selectedBlock!!.id } ?: selectedBlock!!
 
             FeedbackSheet(
@@ -341,9 +384,42 @@ fun HomeScreen(
     }
 }
 
+private fun TimelineItem.timelineKey(): String {
+    return when (this) {
+        is TimelineItem.TimeMarker -> "m_${minute}"
+        is TimelineItem.Gap -> "g_${start}_${end}"
+        is TimelineItem.BlockPart -> "b_${block.id}_${partStart}_${partEnd}_${isContinuation}"
+    }
+}
+
+@Composable
+private fun TimeMarkerRow(minute: Int, nowMin: Int) {
+    val isCurrentHour = (nowMin / 60) == (minute / 60)
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(MARKER_HEIGHT),
+        color = MarkerGray
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(text = minute.toHHMM(), color = MarkerText, maxLines = 1)
+            if (isCurrentHour) {
+                Text(text = "NOW ${nowMin.toHHMM()}", color = MarkerText, maxLines = 1)
+            }
+        }
+    }
+}
+
 @Composable
 private fun BlockCard(
     block: TimeBlock,
+    isContinuation: Boolean,
     status: BlockStatus,
     progress: Float,
     onClick: () -> Unit,
@@ -355,7 +431,7 @@ private fun BlockCard(
         BlockStatus.NOW -> FutureSky
     }
 
-    // ✅ 피드백/메모는 "항상 한 줄 요약"으로 보여주되, 없으면 숨김
+    // ✅ 피드백/메모 1줄 요약 (있을 때만 표시)
     val hasFb = block.feedbackTags.isNotEmpty() || block.feedbackMemo.isNotBlank()
     val tagsText = if (block.feedbackTags.isEmpty()) "" else block.feedbackTags.joinToString(", ")
     val memoText = block.feedbackMemo.trim()
@@ -367,6 +443,8 @@ private fun BlockCard(
         else -> ""
     }
 
+    val titleText = if (isContinuation) "↪ ${block.title}" else block.title
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -375,7 +453,6 @@ private fun BlockCard(
     ) {
         Box(modifier = Modifier.fillMaxSize().background(baseColor)) {
 
-            // ✅ 진행중: 하늘색 위에 상아색이 진행률만큼 덮이는 방식
             if (status == BlockStatus.NOW) {
                 Box(
                     modifier = Modifier
@@ -387,7 +464,6 @@ private fun BlockCard(
 
             Row(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
 
-                // 진행중 왼쪽 인디케이터
                 if (status == BlockStatus.NOW) {
                     Box(
                         modifier = Modifier
@@ -399,24 +475,11 @@ private fun BlockCard(
                 }
 
                 Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        text = block.title,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = formatRange(block.startMinute, block.endMinute),
-                        maxLines = 1,
-                        overflow = TextOverflow.Clip
-                    )
+                    Text(text = titleText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(text = formatRange(block.startMinute, block.endMinute), maxLines = 1)
 
-                    // ✅ 여기서 바로 보이게: 1줄 요약(너무 길면 …)
                     if (hasFb) {
-                        Text(
-                            text = fbSummary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        Text(text = fbSummary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -506,26 +569,89 @@ private fun ToggleTagButton(
     }) { OneLineText(text) }
 }
 
-// ✅ 버튼 텍스트 줄바꿈 방지
 @Composable
 private fun OneLineText(s: String) {
     Text(text = s, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
 }
 
-private fun buildTimelineItems(blocks: List<TimeBlock>): List<TimelineItem> {
-    val result = mutableListOf<TimelineItem>()
-    var cursor = 0
+private fun buildTimelineItems(blocks: List<TimeBlock>, includeMarkers: Boolean): List<TimelineItem> {
+    val parts = mutableListOf<TimelineItem.BlockPart>()
 
     for (b in blocks) {
         val start = b.startMinute.coerceIn(0, DAY_MIN)
-        val end = b.endMinute.coerceAtMost(DAY_MIN)
+        val end = b.endMinute
 
-        if (start > cursor) addGaps(result, cursor, start)
-        result.add(TimelineItem.Block(b))
-        cursor = maxOf(cursor, end)
+        if (end <= DAY_MIN) {
+            parts.add(
+                TimelineItem.BlockPart(
+                    block = b,
+                    partStart = start,
+                    partEnd = end.coerceIn(0, DAY_MIN),
+                    isContinuation = false
+                )
+            )
+        } else {
+            parts.add(
+                TimelineItem.BlockPart(
+                    block = b,
+                    partStart = start,
+                    partEnd = DAY_MIN,
+                    isContinuation = false
+                )
+            )
+            val e2 = end % DAY_MIN
+            if (e2 > 0) {
+                parts.add(
+                    TimelineItem.BlockPart(
+                        block = b,
+                        partStart = 0,
+                        partEnd = e2.coerceIn(0, DAY_MIN),
+                        isContinuation = true
+                    )
+                )
+            }
+        }
+    }
+
+    val sortedParts = parts.sortedBy { it.partStart }
+
+    val result = mutableListOf<TimelineItem>()
+    var cursor = 0
+
+    for (p in sortedParts) {
+        val s = p.partStart.coerceIn(0, DAY_MIN)
+        val e = p.partEnd.coerceIn(0, DAY_MIN)
+
+        if (s > cursor) addGaps(result, cursor, s)
+        result.add(p)
+        cursor = maxOf(cursor, e)
     }
     if (cursor < DAY_MIN) addGaps(result, cursor, DAY_MIN)
-    return result
+
+    if (!includeMarkers) return result
+
+    val markers = (0..23).map { h -> TimelineItem.TimeMarker(h * 60) }
+
+    return (result + markers).sortedWith { a, b ->
+        val ta = startKey(a)
+        val tb = startKey(b)
+        when {
+            ta != tb -> ta - tb
+            else -> typeRank(a) - typeRank(b) // marker 먼저
+        }
+    }
+}
+
+private fun startKey(item: TimelineItem): Int = when (item) {
+    is TimelineItem.TimeMarker -> item.minute
+    is TimelineItem.Gap -> item.start
+    is TimelineItem.BlockPart -> item.partStart
+}
+
+private fun typeRank(item: TimelineItem): Int = when (item) {
+    is TimelineItem.TimeMarker -> 0
+    is TimelineItem.Gap -> 1
+    is TimelineItem.BlockPart -> 2
 }
 
 private fun addGaps(out: MutableList<TimelineItem>, start: Int, end: Int) {
