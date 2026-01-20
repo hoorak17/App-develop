@@ -1,10 +1,8 @@
 package com.example.plannermvp.data
 
 import android.content.Context
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import com.example.plannermvp.data.persistence.ScheduleDataStore
 import com.example.plannermvp.data.persistence.ScheduleSnapshot
 import kotlinx.coroutines.*
@@ -35,18 +33,18 @@ object ScheduleStore {
     private var seededOnce = false
 
     // ---------------------------
-    // Dev Mode (시간/날짜 시뮬레이션) - ✅ Compose 관찰 가능 State로 승격
+    // Dev Mode (시간/날짜 시뮬레이션)
     // ---------------------------
-    private var _devMode by mutableStateOf(false)
-    val devMode: Boolean get() = _devMode
+    private val _devMode = mutableStateOf(false)
+    val devMode: Boolean get() = _devMode.value
 
     private var devBaseRealNow: LocalDateTime? = null
 
-    private var _devOffsetMinutes by mutableStateOf(0L)
-    private var _devOffsetDays by mutableStateOf(0L)
-
-    val devOffsetMinutes: Long get() = _devOffsetMinutes
-    val devOffsetDays: Long get() = _devOffsetDays
+    // ✅ Compose가 관찰 가능하도록 state로 승격
+    private val _devOffsetMinutes = mutableStateOf(0L)
+    private val _devOffsetDays = mutableStateOf(0L)
+    val devOffsetMinutes: Long get() = _devOffsetMinutes.value
+    val devOffsetDays: Long get() = _devOffsetDays.value
 
     private var snapshotBeforeDev: ScheduleSnapshot? = null
 
@@ -55,7 +53,7 @@ object ScheduleStore {
             LocalDateTime.now()
         } else {
             val base = devBaseRealNow ?: LocalDateTime.now()
-            base.plusDays(_devOffsetDays).plusMinutes(_devOffsetMinutes)
+            base.plusDays(devOffsetDays).plusMinutes(devOffsetMinutes)
         }
     }
 
@@ -68,16 +66,16 @@ object ScheduleStore {
         if (!devMode) {
             snapshotBeforeDev = buildSnapshot(schemaVersion = 3)
             devBaseRealNow = LocalDateTime.now()
-            _devOffsetMinutes = 0L
-            _devOffsetDays = 0L
-            _devMode = true
+            _devOffsetMinutes.value = 0L
+            _devOffsetDays.value = 0L
+            _devMode.value = true
         } else {
             snapshotBeforeDev?.let { applySnapshotToState(it) }
             snapshotBeforeDev = null
             devBaseRealNow = null
-            _devOffsetMinutes = 0L
-            _devOffsetDays = 0L
-            _devMode = false
+            _devOffsetMinutes.value = 0L
+            _devOffsetDays.value = 0L
+            _devMode.value = false
 
             // dev OFF 후 실사용 상태 저장
             persistDebounced()
@@ -86,12 +84,12 @@ object ScheduleStore {
 
     fun devAdjustMinutes(deltaMinutes: Int) {
         if (!devMode) return
-        _devOffsetMinutes += deltaMinutes.toLong()
+        _devOffsetMinutes.value = _devOffsetMinutes.value + deltaMinutes.toLong()
     }
 
     fun devAdjustDays(deltaDays: Int) {
         if (!devMode) return
-        _devOffsetDays += deltaDays.toLong()
+        _devOffsetDays.value = _devOffsetDays.value + deltaDays.toLong()
     }
 
     // ---------------------------
@@ -167,6 +165,38 @@ object ScheduleStore {
     }
 
     // ---------------------------
+    // Reset (전체 초기화)
+    // ---------------------------
+    fun resetAllToDefault() {
+        val ctx = appContext ?: return
+
+        // dev 모드 강제 종료(롤백 상태 자체가 무의미해지므로)
+        snapshotBeforeDev = null
+        devBaseRealNow = null
+        _devOffsetMinutes.value = 0L
+        _devOffsetDays.value = 0L
+        _devMode.value = false
+
+        // 저장 데이터 삭제 + 상태 초기화
+        ioScope.launch {
+            ScheduleDataStore.clear(ctx)
+        }
+
+        todayBlocks.clear()
+        yesterdayBlocks.clear()
+        tomorrowBlocks.clear()
+        historyDays.clear()
+
+        // 기본 seed 다시 주입
+        seededOnce = false
+        seedIfNeeded()
+
+        // 이후 저장 재개
+        loadedOnce = true
+        persistDebounced()
+    }
+
+    // ---------------------------
     // Seed
     // ---------------------------
     private fun seedIfNeeded() {
@@ -196,7 +226,7 @@ object ScheduleStore {
 
     private fun archiveTodayToHistory() {
         if (devMode) return
-        val todayIso = nowDateTime().toLocalDate().toString()
+        val todayIso = LocalDate.now().toString()
         if (todayBlocks.isEmpty()) return
         upsertHistoryDay(todayIso, todayBlocks.toList())
     }
@@ -205,7 +235,7 @@ object ScheduleStore {
         val t = title.trim()
         if (t.isEmpty()) return emptyList()
 
-        val todayIso = nowDateTime().toLocalDate().toString()
+        val todayIso = LocalDate.now().toString()
         val items = mutableListOf<HistoryItem>()
 
         for (day in historyDays) {

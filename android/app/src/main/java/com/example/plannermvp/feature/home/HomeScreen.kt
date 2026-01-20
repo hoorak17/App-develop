@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -55,7 +56,6 @@ sealed interface TimelineItem {
     ) : TimelineItem
 
     data class Gap(val start: Int, val end: Int) : TimelineItem
-
     data class TimeMarker(val minute: Int) : TimelineItem
 }
 
@@ -122,7 +122,7 @@ private fun statusOfBlock(nowMin: Int, start: Int, end: Int): BlockStatus {
 fun HomeScreen(
     onGoSummary: () -> Unit
 ) {
-    // ✅ 진행 표시 / 시간 표시를 자동 갱신
+    // ✅ 진행/시간 표시 자동 갱신 (가상시계에도 적용)
     var tick by remember { mutableStateOf(0) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -131,21 +131,10 @@ fun HomeScreen(
         }
     }
 
-    // ✅ 핵심: todayBlocks를 "상태로 읽기" (toList()를 먼저 떠서 안정화)
-    val blocks: List<TimeBlock> = remember(ScheduleStore.todayBlocks, tick) {
-        // remember에 list 자체를 넣는 게 아니라, 아래처럼 toList()로 상태 읽기만 해도 recomposition 발생합니다.
-        ScheduleStore.todayBlocks.toList().sortedBy { it.startMinute }
-    }
-
-    val nowDateTime = ScheduleStore.nowDateTime()
+    val nowDateTime = ScheduleStore.nowDateTime() // devOffset state 읽힘
     val nowDate = nowDateTime.toLocalDate()
     val todayDateText = remember(nowDate) { formatKoreanDate(nowDate) }
     val nowMin = ScheduleStore.nowMinuteOfDay()
-
-    // ✅ 핵심: items 캐시 금지(또는 derivedStateOf). 즉시 갱신 보장.
-    val timelineItems: List<TimelineItem> = remember(blocks, ScheduleStore.devMode) {
-        buildTimelineItems(blocks, includeMarkers = ScheduleStore.devMode)
-    }
 
     var selectedBlock by remember { mutableStateOf<TimeBlock?>(null) }
     var showFeedbackSheet by remember { mutableStateOf(false) }
@@ -160,6 +149,13 @@ fun HomeScreen(
     var addEnd by remember { mutableStateOf(10 * 60) }
 
     var showEditDialog by remember { mutableStateOf(false) }
+
+    // ✅ 절대 remember로 굳히지 말 것: 상태 리스트가 바뀌면 즉시 재계산되어야 함
+    val blocks = ScheduleStore.todayBlocks.sortedBy { it.startMinute }
+    val timelineItems = buildTimelineItems(blocks, includeMarkers = ScheduleStore.devMode)
+
+    // ✅ 전체 초기화 확인 다이얼
+    var showResetConfirm by remember { mutableStateOf(false) }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
 
@@ -236,29 +232,29 @@ fun HomeScreen(
                         ) { OneLineText("+1d") }
                     }
 
+                    // ✅ 전체 초기화 버튼(Dev 모드에서만 노출)
+                    OutlinedButton(
+                        onClick = { showResetConfirm = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("모든 기록 초기화하고 기본으로 되돌리기") }
+
                     Text("Dev 모드 종료(롤백): 상단 날짜 카드 롱프레스")
                 }
             }
         }
 
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-
-            // ✅ 핵심: 반드시 key 부여 (피드백/메모 즉시 반영 안정화)
             items(
                 items = timelineItems,
-                key = { it.timelineKey() }
+                key = { it.timelineKey() } // ✅ 즉시 갱신 안정화 핵심
             ) { item ->
                 when (item) {
-                    is TimelineItem.TimeMarker -> {
-                        TimeMarkerRow(minute = item.minute, nowMin = nowMin)
-                    }
+                    is TimelineItem.TimeMarker -> TimeMarkerRow(minute = item.minute, nowMin = nowMin)
 
                     is TimelineItem.BlockPart -> {
                         val b = item.block
                         val status = statusOfBlock(nowMin, b.startMinute, b.endMinute)
-                        val progress = if (status == BlockStatus.NOW) {
-                            progressOfBlock(nowMin, b.startMinute, b.endMinute)
-                        } else 0f
+                        val progress = if (status == BlockStatus.NOW) progressOfBlock(nowMin, b.startMinute, b.endMinute) else 0f
 
                         BlockCard(
                             block = b,
@@ -276,20 +272,35 @@ fun HomeScreen(
                         )
                     }
 
-                    is TimelineItem.Gap -> {
-                        GapCard(
-                            start = item.start,
-                            end = item.end,
-                            onClick = {
-                                addStart = item.start
-                                addEnd = (item.start + 60).coerceAtMost(item.end)
-                                showAddDialog = true
-                            }
-                        )
-                    }
+                    is TimelineItem.Gap -> GapCard(
+                        start = item.start,
+                        end = item.end,
+                        onClick = {
+                            addStart = item.start
+                            addEnd = (item.start + 60).coerceAtMost(item.end)
+                            showAddDialog = true
+                        }
+                    )
                 }
             }
         }
+    }
+
+    if (showResetConfirm) {
+        AlertDialog(
+            onDismissRequest = { showResetConfirm = false },
+            title = { Text("전체 초기화") },
+            text = { Text("모든 기록(오늘/어제/내일/히스토리/저장 데이터)을 삭제하고 기본 일정으로 되돌립니다. 진행하시겠습니까?") },
+            confirmButton = {
+                Button(onClick = {
+                    ScheduleStore.resetAllToDefault()
+                    showResetConfirm = false
+                }) { Text("초기화") }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { showResetConfirm = false }) { Text("취소") }
+            }
+        )
     }
 
     if (showAddDialog) {
@@ -315,7 +326,7 @@ fun HomeScreen(
             onDismissRequest = { showFeedbackSheet = false },
             sheetState = feedbackSheetState
         ) {
-            // ✅ 시트는 항상 최신 상태를 다시 조회
+            // ✅ 항상 최신 상태 재조회
             val latest = ScheduleStore.todayBlocks.firstOrNull { it.id == selectedBlock!!.id } ?: selectedBlock!!
 
             FeedbackSheet(
@@ -384,12 +395,10 @@ fun HomeScreen(
     }
 }
 
-private fun TimelineItem.timelineKey(): String {
-    return when (this) {
-        is TimelineItem.TimeMarker -> "m_${minute}"
-        is TimelineItem.Gap -> "g_${start}_${end}"
-        is TimelineItem.BlockPart -> "b_${block.id}_${partStart}_${partEnd}_${isContinuation}"
-    }
+private fun TimelineItem.timelineKey(): String = when (this) {
+    is TimelineItem.TimeMarker -> "m_${minute}"
+    is TimelineItem.Gap -> "g_${start}_${end}"
+    is TimelineItem.BlockPart -> "b_${block.id}_${partStart}_${partEnd}_${isContinuation}"
 }
 
 @Composable
@@ -431,7 +440,7 @@ private fun BlockCard(
         BlockStatus.NOW -> FutureSky
     }
 
-    // ✅ 피드백/메모 1줄 요약 (있을 때만 표시)
+    // ✅ 피드백/메모 즉시 표시(있을 때만)
     val hasFb = block.feedbackTags.isNotEmpty() || block.feedbackMemo.isNotBlank()
     val tagsText = if (block.feedbackTags.isEmpty()) "" else block.feedbackTags.joinToString(", ")
     val memoText = block.feedbackMemo.trim()
@@ -574,6 +583,9 @@ private fun OneLineText(s: String) {
     Text(text = s, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
 }
 
+/**
+ * ✅ 자정 넘김(endMinute>1440) 블록 처리 + (Dev 모드면) 시간 눈금 추가
+ */
 private fun buildTimelineItems(blocks: List<TimeBlock>, includeMarkers: Boolean): List<TimelineItem> {
     val parts = mutableListOf<TimelineItem.BlockPart>()
 
@@ -614,7 +626,6 @@ private fun buildTimelineItems(blocks: List<TimeBlock>, includeMarkers: Boolean)
     }
 
     val sortedParts = parts.sortedBy { it.partStart }
-
     val result = mutableListOf<TimelineItem>()
     var cursor = 0
 

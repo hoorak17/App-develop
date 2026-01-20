@@ -27,6 +27,14 @@ object ScheduleDataStore {
 
         return runCatching { SnapshotCodec.decode(raw) }.getOrNull()
     }
+
+    /** ✅ 전체 기록 초기화(저장 데이터 삭제) */
+    suspend fun clear(context: Context) {
+        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .remove(KEY_SNAPSHOT)
+            .apply()
+    }
 }
 
 /**

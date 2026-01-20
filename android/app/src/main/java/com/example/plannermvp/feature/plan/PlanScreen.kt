@@ -37,26 +37,28 @@ fun PlanScreen(
     var showDialog by remember { mutableStateOf(false) }
     var dialogMode by remember { mutableStateOf<DialogMode>(DialogMode.AddNew) }
 
-    // ✅ 탭 순서/용어 = 어제일정 / 신규일정 / 불러오기
     var tab by remember { mutableStateOf(AddSourceTab.YESTERDAY) }
 
     val yesterday = ScheduleStore.yesterdayBlocks.toList()
     val tomorrow = ScheduleStore.tomorrowBlocks.sortedBy { it.startMinute }
 
-    // ✅ (수정) remember로 고정하지 말고, stateList 변화에 반응하도록 매번 계산
+    // ✅ 히스토리: remember로 굳히지 말고 매번 최신 상태 반영
     val historyDates = ScheduleStore.historyDayList(limit = 14)
     var selectedHistoryDate by remember { mutableStateOf<String?>(null) }
 
+    // ✅ 목록 변화 시 선택값 보정
     LaunchedEffect(historyDates) {
-        if (selectedHistoryDate == null || selectedHistoryDate !in historyDates) {
-            selectedHistoryDate = historyDates.firstOrNull()
+        if (historyDates.isEmpty()) {
+            selectedHistoryDate = null
+        } else if (selectedHistoryDate == null || selectedHistoryDate !in historyDates) {
+            selectedHistoryDate = historyDates.first()
         }
     }
 
-    val historyBlocks = if (selectedHistoryDate == null) emptyList()
-    else ScheduleStore.blocksOfHistoryDay(selectedHistoryDate!!)
+    val historyBlocks =
+        if (selectedHistoryDate == null) emptyList()
+        else ScheduleStore.blocksOfHistoryDay(selectedHistoryDate!!)
 
-    // 즉시 추가 실패 메시지(겹침 등)
     var quickAddError by remember { mutableStateOf("") }
 
     Column(
@@ -80,7 +82,6 @@ fun PlanScreen(
             ) { Text("완료(홈)") }
         }
 
-        // 탭
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(
                 onClick = { tab = AddSourceTab.YESTERDAY; quickAddError = "" },
@@ -108,9 +109,6 @@ fun PlanScreen(
                 .weight(1f),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // -------------------------
-            // 추가 영역 (탭에 따라)
-            // -------------------------
             when (tab) {
                 AddSourceTab.YESTERDAY -> {
                     item {
@@ -170,15 +168,15 @@ fun PlanScreen(
                                 if (historyDates.isEmpty()) {
                                     Text("히스토리가 없습니다. 홈→요약→계획 흐름을 한 번 거치면 누적됩니다.")
                                 } else {
-                                    // 날짜 선택 버튼들
                                     historyDates.forEach { d ->
                                         OutlinedButton(
                                             onClick = { selectedHistoryDate = d },
                                             modifier = Modifier.fillMaxWidth()
                                         ) { Text(if (d == selectedHistoryDate) "[$d]" else d) }
+
+                                        Spacer(modifier = Modifier.height(6.dp))
                                     }
 
-                                    Spacer(modifier = Modifier.height(6.dp))
                                     Text("선택 날짜: ${selectedHistoryDate ?: "-"}")
 
                                     if (historyBlocks.isEmpty()) {
@@ -209,9 +207,6 @@ fun PlanScreen(
                 }
             }
 
-            // -------------------------
-            // 내일 일정 목록
-            // -------------------------
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(
@@ -252,9 +247,6 @@ fun PlanScreen(
         }
     }
 
-    // -------------------------
-    // 다이얼 (신규/수정)
-    // -------------------------
     if (showDialog) {
         val (titleDefault, startDefault, endDefault) = when (val m = dialogMode) {
             DialogMode.AddNew -> Triple("", 9 * 60, 10 * 60)
