@@ -116,12 +116,18 @@ fun HomeScreen(
 ) {
     val ctx = LocalContext.current
 
-    // ✅ 빈 일정표 문제 방지: 홈에서 안전하게 init 호출(이미 init되어 있으면 no-op)
+    // ✅ 홈에서 안전하게 init 호출(이미 init되어 있으면 no-op)
     LaunchedEffect(Unit) {
         ScheduleStore.initPersistence(ctx)
+
+        // ✅ 첫 진입에서도 롤오버 체크 1회 보장
+        // (Store에서도 로드 직후 체크를 수행하지만, UI 레이어에서도 한 번 더 호출해도 무해)
+        if (!ScheduleStore.devMode) {
+            ScheduleStore.checkRolloverOnAppOpen()
+        }
     }
 
-    // ✅ 앱 오픈 시 날짜 전환 체크(복귀/재진입 포함)
+    // ✅ Dev 모드 OFF로 돌아올 때도 롤오버 체크(기존 흐름 유지)
     LaunchedEffect(ScheduleStore.devMode) {
         if (!ScheduleStore.devMode) {
             ScheduleStore.checkRolloverOnAppOpen()
@@ -175,7 +181,6 @@ fun HomeScreen(
                 OutlinedButton(
                     onClick = {
                         ScheduleStore.confirmRolloverSkip()
-                        // ✅ 넘긴 뒤에는 홈 유지(Plan으로 튀지 않음)
                     }
                 ) { Text("넘기기") }
             }
@@ -227,7 +232,7 @@ fun HomeScreen(
             }
         }
 
-        // ✅ Dev 모드 UI: 설명 문구 제거 / 가상시각만 표시
+        // ✅ Dev 모드 UI: 가상시각만 표시
         if (ScheduleStore.devMode) {
             val devNow = ScheduleStore.nowDateTime()
             Card(modifier = Modifier.fillMaxWidth()) {
