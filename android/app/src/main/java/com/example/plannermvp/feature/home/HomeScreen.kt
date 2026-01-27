@@ -7,14 +7,17 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
@@ -73,11 +76,13 @@ private val NowIndicator = Color(0xFF2B6CB0)
 private enum class BlockStatus { PAST, NOW, FUTURE }
 
 private fun progressOfBlock(nowMin: Int, start: Int, end: Int): Float {
+    // 일반(자정 안 넘김)
     if (end <= DAY_MIN) {
         if (nowMin <= start) return 0f
         if (nowMin >= end) return 1f
         return (nowMin - start).toFloat() / (end - start).toFloat()
     }
+    // 자정 넘김(end > 1440)
     val e2 = end % DAY_MIN
     return when {
         nowMin >= start -> (nowMin - start).toFloat() / (DAY_MIN - start).toFloat()
@@ -108,6 +113,30 @@ private fun statusOfBlock(nowMin: Int, start: Int, end: Int): BlockStatus {
     }
 }
 
+private fun remainingMinutesOfBlock(nowMin: Int, start: Int, end: Int): Int {
+    // NOW 상태에서만 호출한다고 가정(안전하게 clamp)
+    if (end <= DAY_MIN) {
+        return (end - nowMin).coerceAtLeast(0)
+    }
+    val e2 = end % DAY_MIN
+    return when {
+        nowMin >= start -> (DAY_MIN - nowMin) + e2
+        nowMin < e2 -> (e2 - nowMin)
+        else -> 0
+    }.coerceAtLeast(0)
+}
+
+private fun formatRemain(mins: Int): String {
+    val m = mins.coerceAtLeast(0)
+    val h = m / 60
+    val r = m % 60
+    return when {
+        h > 0 && r > 0 -> "${h}h ${r}m 남음"
+        h > 0 -> "${h}h 남음"
+        else -> "${r}m 남음"
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
@@ -116,18 +145,13 @@ fun HomeScreen(
 ) {
     val ctx = LocalContext.current
 
-    // ✅ 홈에서 안전하게 init 호출(이미 init되어 있으면 no-op)
     LaunchedEffect(Unit) {
         ScheduleStore.initPersistence(ctx)
-
-        // ✅ 첫 진입에서도 롤오버 체크 1회 보장
-        // (Store에서도 로드 직후 체크를 수행하지만, UI 레이어에서도 한 번 더 호출해도 무해)
         if (!ScheduleStore.devMode) {
             ScheduleStore.checkRolloverOnAppOpen()
         }
     }
 
-    // ✅ Dev 모드 OFF로 돌아올 때도 롤오버 체크(기존 흐름 유지)
     LaunchedEffect(ScheduleStore.devMode) {
         if (!ScheduleStore.devMode) {
             ScheduleStore.checkRolloverOnAppOpen()
@@ -156,17 +180,14 @@ fun HomeScreen(
     val items = remember(blocks) { buildTimelineItems(blocks) }
     val nowMin = ScheduleStore.nowMinuteOfDay()
 
-    // ✅ reset 2회 경고(Dev 모드에서만 버튼 노출)
     var askReset1 by remember { mutableStateOf(false) }
     var askReset2 by remember { mutableStateOf(false) }
 
-    // ✅ 날짜 전환 팝업(가볍게)
     val pendingRollover = ScheduleStore.pendingRollover
-    val pendingFromIso = ScheduleStore.pendingFromDateIso
 
     if (pendingRollover && !ScheduleStore.devMode) {
         AlertDialog(
-            onDismissRequest = { /* 사용자가 명시적으로 결정하게 두기 */ },
+            onDismissRequest = { },
             title = { Text("어제 기록이 남아 있어요") },
             text = { Text("어제 기록을 마무리할까요?") },
             confirmButton = {
@@ -191,12 +212,11 @@ fun HomeScreen(
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
 
-            // ✅ 상단: 날짜 + 일정 개수만
             Card(
                 modifier = Modifier
                     .weight(1f)
                     .combinedClickable(
-                        onClick = { /* no-op */ },
+                        onClick = { },
                         onLongClick = { ScheduleStore.toggleDevMode() }
                     )
             ) {
@@ -214,7 +234,6 @@ fun HomeScreen(
             Button(onClick = onGoSummary) { Text("오늘 요약") }
         }
 
-        // ✅ 계획이 비어 있으면: 강제 이동 금지, 배너로만 안내
         if (!ScheduleStore.devMode && ScheduleStore.isPlanMissing()) {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Row(
@@ -232,7 +251,6 @@ fun HomeScreen(
             }
         }
 
-        // ✅ Dev 모드 UI: 가상시각만 표시
         if (ScheduleStore.devMode) {
             val devNow = ScheduleStore.nowDateTime()
             Card(modifier = Modifier.fillMaxWidth()) {
@@ -295,6 +313,7 @@ fun HomeScreen(
                             block = b,
                             status = status,
                             progress = progress,
+                            nowMin = nowMin,
                             onClick = {
                                 selectedBlock = b
                                 showFeedbackSheet = true
@@ -322,7 +341,6 @@ fun HomeScreen(
         }
     }
 
-    // ✅ reset 경고 2회
     if (askReset1) {
         AlertDialog(
             onDismissRequest = { askReset1 = false },
@@ -445,6 +463,7 @@ private fun BlockCard(
     block: TimeBlock,
     status: BlockStatus,
     progress: Float,
+    nowMin: Int,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
@@ -454,11 +473,9 @@ private fun BlockCard(
         BlockStatus.NOW -> FutureSky
     }
 
-    // ✅ 피드백/메모는 "있을 때만" 한 줄 표시 + 카드 높이 자동 증가
     val hasFb = block.feedbackTags.isNotEmpty() || block.feedbackMemo.isNotBlank()
     val tagsText = if (block.feedbackTags.isEmpty()) "" else block.feedbackTags.joinToString(", ")
     val memoText = block.feedbackMemo.trim()
-
     val fbSummary = when {
         tagsText.isNotBlank() && memoText.isNotBlank() -> "$tagsText | $memoText"
         tagsText.isNotBlank() -> tagsText
@@ -466,19 +483,32 @@ private fun BlockCard(
         else -> ""
     }
 
+    // ✅ 남은 시간 문자열
+    val remainText = if (status == BlockStatus.NOW) {
+        val remain = remainingMinutesOfBlock(nowMin, block.startMinute, block.endMinute)
+        formatRemain(remain)
+    } else ""
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = ROW_MIN_HEIGHT)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
     ) {
-        Box(modifier = Modifier.fillMaxSize().background(baseColor)) {
-
+        // ✅ 폭을 "명시 계산"해서 진행 채움이 무조건 보이게 함
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(baseColor)
+        ) {
             if (status == BlockStatus.NOW) {
+                val fraction = progress.coerceIn(0f, 1f)
+                val filledWidth = maxWidth * fraction
+
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth(progress.coerceIn(0f, 1f))
-                        .fillMaxSize()
+                        .fillMaxHeight()
+                        .width(filledWidth)
                         .background(PastIvory)
                 )
             }
@@ -498,6 +528,10 @@ private fun BlockCard(
                 Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(block.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(formatRange(block.startMinute, block.endMinute), maxLines = 1, overflow = TextOverflow.Clip)
+
+                    if (status == BlockStatus.NOW) {
+                        Text(remainText, maxLines = 1, overflow = TextOverflow.Clip)
+                    }
 
                     if (hasFb) {
                         Text(fbSummary, maxLines = 1, overflow = TextOverflow.Ellipsis)
