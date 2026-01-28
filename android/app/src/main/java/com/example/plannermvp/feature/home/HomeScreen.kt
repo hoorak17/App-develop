@@ -1,4 +1,7 @@
-@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@file:OptIn(
+    androidx.compose.foundation.ExperimentalFoundationApi::class,
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class
+)
 
 package com.example.plannermvp.feature.home
 
@@ -8,6 +11,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -532,16 +536,13 @@ private fun FeedbackSheet(
         Text("피드백")
         Text("${block.title} (${formatRange(block.startMinute, block.endMinute)})")
 
-        val half = (options.size + 1) / 2
-        val row1 = options.take(half)
-        val row2 = options.drop(half)
-
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            row1.forEach { label -> ToggleTagButton(label = label, current = tags) { tags = it } }
-        }
-        if (row2.isNotEmpty()) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                row2.forEach { label -> ToggleTagButton(label = label, current = tags) { tags = it } }
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            options.forEach { label ->
+                ToggleTagButton(label = label, current = tags) { tags = it }
             }
         }
 
