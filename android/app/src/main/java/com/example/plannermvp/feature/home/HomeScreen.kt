@@ -31,11 +31,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.plannermvp.data.Category
-import com.example.plannermvp.data.ScheduleStore
 import com.example.plannermvp.data.TimeBlock
 import com.example.plannermvp.data.formatRange
 import com.example.plannermvp.data.toHHMM
@@ -139,19 +138,17 @@ private fun formatRemain(mins: Int): String {
 @Composable
 fun HomeScreen(
     onGoSummary: () -> Unit,
-    onGoPlan: () -> Unit
+    onGoPlan: () -> Unit,
+    viewModel: HomeViewModel = viewModel()
 ) {
-    val ctx = LocalContext.current
-
     LaunchedEffect(Unit) {
-        ScheduleStore.initPersistence(ctx)
-        if (!ScheduleStore.devMode) ScheduleStore.checkRolloverOnAppOpen()
+        if (!viewModel.devMode) viewModel.checkRolloverOnAppOpen()
     }
-    LaunchedEffect(ScheduleStore.devMode) {
-        if (!ScheduleStore.devMode) ScheduleStore.checkRolloverOnAppOpen()
+    LaunchedEffect(viewModel.devMode) {
+        if (!viewModel.devMode) viewModel.checkRolloverOnAppOpen()
     }
 
-    val nowDateTime = ScheduleStore.nowDateTime()
+    val nowDateTime = viewModel.nowDateTime()
     val nowDate = nowDateTime.toLocalDate()
     val todayDateText = remember(nowDate) { formatKoreanDate(nowDate) }
 
@@ -168,23 +165,23 @@ fun HomeScreen(
     var addEnd by remember { mutableStateOf(10 * 60) }
     var showEditDialog by remember { mutableStateOf(false) }
 
-    val blocks = ScheduleStore.todayBlocks.sortedBy { it.startMinute }
+    val blocks = viewModel.todayBlocks.sortedBy { it.startMinute }
     val items = remember(blocks) { buildTimelineItems(blocks) }
-    val nowMin = ScheduleStore.nowMinuteOfDay()
+    val nowMin = viewModel.nowMinuteOfDay()
 
     var askReset1 by remember { mutableStateOf(false) }
     var askReset2 by remember { mutableStateOf(false) }
 
-    if (ScheduleStore.pendingRollover && !ScheduleStore.devMode) {
+    if (viewModel.pendingRollover && !viewModel.devMode) {
         AlertDialog(
             onDismissRequest = { },
             title = { Text("어제 기록이 남아 있어요") },
             text = { Text("어제 기록을 마무리할까요?") },
             confirmButton = {
-                Button(onClick = { ScheduleStore.keepRolloverPending(); onGoSummary() }) { Text("마무리") }
+                Button(onClick = { viewModel.keepRolloverPending(); onGoSummary() }) { Text("마무리") }
             },
             dismissButton = {
-                OutlinedButton(onClick = { ScheduleStore.confirmRolloverSkip() }) { Text("넘기기") }
+                OutlinedButton(onClick = { viewModel.confirmRolloverSkip() }) { Text("넘기기") }
             }
         )
     }
@@ -197,7 +194,7 @@ fun HomeScreen(
                     .weight(1f)
                     .combinedClickable(
                         onClick = { },
-                        onLongClick = { ScheduleStore.toggleDevMode() }
+                        onLongClick = { viewModel.toggleDevMode() }
                     )
             ) {
                 Column(
@@ -213,7 +210,7 @@ fun HomeScreen(
             Button(onClick = onGoSummary) { Text("오늘 요약") }
         }
 
-        if (!ScheduleStore.devMode && ScheduleStore.isPlanMissing()) {
+        if (!viewModel.devMode && viewModel.isPlanMissing()) {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Row(
                     modifier = Modifier.padding(12.dp),
@@ -230,8 +227,8 @@ fun HomeScreen(
             }
         }
 
-        if (ScheduleStore.devMode) {
-            val devNow = ScheduleStore.nowDateTime()
+        if (viewModel.devMode) {
+            val devNow = viewModel.nowDateTime()
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(12.dp),
@@ -240,26 +237,26 @@ fun HomeScreen(
                     Text("${formatKoreanDate(devNow.toLocalDate())}  ${formatHHMM(devNow)}")
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        OutlinedButton(onClick = { ScheduleStore.devAdjustMinutes(-60) }, modifier = Modifier.weight(1f)) {
+                        OutlinedButton(onClick = { viewModel.devAdjustMinutes(-60) }, modifier = Modifier.weight(1f)) {
                             OneLineText("-1h")
                         }
-                        OutlinedButton(onClick = { ScheduleStore.devAdjustMinutes(+60) }, modifier = Modifier.weight(1f)) {
+                        OutlinedButton(onClick = { viewModel.devAdjustMinutes(+60) }, modifier = Modifier.weight(1f)) {
                             OneLineText("+1h")
                         }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        OutlinedButton(onClick = { ScheduleStore.devAdjustMinutes(-10) }, modifier = Modifier.weight(1f)) {
+                        OutlinedButton(onClick = { viewModel.devAdjustMinutes(-10) }, modifier = Modifier.weight(1f)) {
                             OneLineText("-10m")
                         }
-                        OutlinedButton(onClick = { ScheduleStore.devAdjustMinutes(+10) }, modifier = Modifier.weight(1f)) {
+                        OutlinedButton(onClick = { viewModel.devAdjustMinutes(+10) }, modifier = Modifier.weight(1f)) {
                             OneLineText("+10m")
                         }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        OutlinedButton(onClick = { ScheduleStore.devAdjustDays(-1) }, modifier = Modifier.weight(1f)) {
+                        OutlinedButton(onClick = { viewModel.devAdjustDays(-1) }, modifier = Modifier.weight(1f)) {
                             OneLineText("-1d")
                         }
-                        OutlinedButton(onClick = { ScheduleStore.devAdjustDays(+1) }, modifier = Modifier.weight(1f)) {
+                        OutlinedButton(onClick = { viewModel.devAdjustDays(+1) }, modifier = Modifier.weight(1f)) {
                             OneLineText("+1d")
                         }
                     }
@@ -324,7 +321,7 @@ fun HomeScreen(
             onDismissRequest = { askReset2 = false },
             title = { Text("정말 초기화할까요?") },
             text = { Text("되돌릴 수 없습니다.") },
-            confirmButton = { Button(onClick = { askReset2 = false; ScheduleStore.resetAll() }) { Text("초기화") } },
+            confirmButton = { Button(onClick = { askReset2 = false; viewModel.resetAll() }) { Text("초기화") } },
             dismissButton = { OutlinedButton(onClick = { askReset2 = false }) { Text("취소") } }
         )
     }
@@ -337,7 +334,7 @@ fun HomeScreen(
             endDefaultMinute = addEnd,
             onDismiss = { showAddDialog = false },
             onTrySave = { t, s, e ->
-                ScheduleStore.addTodayBlock(
+                viewModel.addTodayBlock(
                     title = t,
                     startMinute = s,
                     endMinute = e,
@@ -352,15 +349,16 @@ fun HomeScreen(
             onDismissRequest = { showFeedbackSheet = false },
             sheetState = feedbackSheetState
         ) {
-            val latest = ScheduleStore.todayBlocks.firstOrNull { it.id == selectedBlock!!.id } ?: selectedBlock!!
+            val latest = viewModel.latestBlock(selectedBlock!!.id) ?: selectedBlock!!
             FeedbackSheet(
                 block = latest,
+                options = viewModel.feedbackOptionsFor(latest.category),
                 onSave = { tags, memo ->
-                    ScheduleStore.updateTodayFeedback(latest.id, tags, memo)
+                    viewModel.updateTodayFeedback(latest.id, tags, memo)
                     showFeedbackSheet = false
                 },
                 onClear = {
-                    ScheduleStore.clearTodayFeedback(latest.id)
+                    viewModel.clearTodayFeedback(latest.id)
                     showFeedbackSheet = false
                 }
             )
@@ -384,7 +382,7 @@ fun HomeScreen(
                 ) { Text("수정") }
 
                 OutlinedButton(
-                    onClick = { ScheduleStore.deleteTodayBlock(b.id); showManageSheet = false },
+                    onClick = { viewModel.deleteTodayBlock(b.id); showManageSheet = false },
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("삭제") }
             }
@@ -401,7 +399,7 @@ fun HomeScreen(
             endDefaultMinute = b.endMinute,
             onDismiss = { showEditDialog = false },
             onTrySave = { t, s, e ->
-                ScheduleStore.updateTodayBlock(
+                viewModel.updateTodayBlock(
                     id = b.id,
                     title = t,
                     startMinute = s,
@@ -518,6 +516,7 @@ private fun GapCard(start: Int, end: Int, onClick: () -> Unit) {
 @Composable
 private fun FeedbackSheet(
     block: TimeBlock,
+    options: List<String>,
     onSave: (Set<String>, String) -> Unit,
     onClear: () -> Unit
 ) {
@@ -528,8 +527,6 @@ private fun FeedbackSheet(
         memo = block.feedbackMemo
         tags = block.feedbackTags
     }
-
-    val options = remember(block.category) { ScheduleStore.feedbackOptionsFor(block.category) }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(12.dp)) {
         Text("피드백")
