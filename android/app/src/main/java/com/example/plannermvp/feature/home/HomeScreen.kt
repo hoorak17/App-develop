@@ -7,17 +7,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
@@ -31,6 +28,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
@@ -114,7 +113,6 @@ private fun statusOfBlock(nowMin: Int, start: Int, end: Int): BlockStatus {
 }
 
 private fun remainingMinutesOfBlock(nowMin: Int, start: Int, end: Int): Int {
-    // NOW 상태에서만 호출한다고 가정(안전하게 clamp)
     if (end <= DAY_MIN) {
         return (end - nowMin).coerceAtLeast(0)
     }
@@ -147,15 +145,10 @@ fun HomeScreen(
 
     LaunchedEffect(Unit) {
         ScheduleStore.initPersistence(ctx)
-        if (!ScheduleStore.devMode) {
-            ScheduleStore.checkRolloverOnAppOpen()
-        }
+        if (!ScheduleStore.devMode) ScheduleStore.checkRolloverOnAppOpen()
     }
-
     LaunchedEffect(ScheduleStore.devMode) {
-        if (!ScheduleStore.devMode) {
-            ScheduleStore.checkRolloverOnAppOpen()
-        }
+        if (!ScheduleStore.devMode) ScheduleStore.checkRolloverOnAppOpen()
     }
 
     val nowDateTime = ScheduleStore.nowDateTime()
@@ -173,7 +166,6 @@ fun HomeScreen(
     var showAddDialog by remember { mutableStateOf(false) }
     var addStart by remember { mutableStateOf(9 * 60) }
     var addEnd by remember { mutableStateOf(10 * 60) }
-
     var showEditDialog by remember { mutableStateOf(false) }
 
     val blocks = ScheduleStore.todayBlocks.sortedBy { it.startMinute }
@@ -183,27 +175,16 @@ fun HomeScreen(
     var askReset1 by remember { mutableStateOf(false) }
     var askReset2 by remember { mutableStateOf(false) }
 
-    val pendingRollover = ScheduleStore.pendingRollover
-
-    if (pendingRollover && !ScheduleStore.devMode) {
+    if (ScheduleStore.pendingRollover && !ScheduleStore.devMode) {
         AlertDialog(
             onDismissRequest = { },
             title = { Text("어제 기록이 남아 있어요") },
             text = { Text("어제 기록을 마무리할까요?") },
             confirmButton = {
-                Button(
-                    onClick = {
-                        ScheduleStore.keepRolloverPending()
-                        onGoSummary()
-                    }
-                ) { Text("마무리") }
+                Button(onClick = { ScheduleStore.keepRolloverPending(); onGoSummary() }) { Text("마무리") }
             },
             dismissButton = {
-                OutlinedButton(
-                    onClick = {
-                        ScheduleStore.confirmRolloverSkip()
-                    }
-                ) { Text("넘기기") }
+                OutlinedButton(onClick = { ScheduleStore.confirmRolloverSkip() }) { Text("넘기기") }
             }
         )
     }
@@ -211,7 +192,6 @@ fun HomeScreen(
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-
             Card(
                 modifier = Modifier
                     .weight(1f)
@@ -230,7 +210,6 @@ fun HomeScreen(
                     Text("일정 ${blocks.size}개")
                 }
             }
-
             Button(onClick = onGoSummary) { Text("오늘 요약") }
         }
 
@@ -268,7 +247,6 @@ fun HomeScreen(
                             OneLineText("+1h")
                         }
                     }
-
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                         OutlinedButton(onClick = { ScheduleStore.devAdjustMinutes(-10) }, modifier = Modifier.weight(1f)) {
                             OneLineText("-10m")
@@ -277,7 +255,6 @@ fun HomeScreen(
                             OneLineText("+10m")
                         }
                     }
-
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                         OutlinedButton(onClick = { ScheduleStore.devAdjustDays(-1) }, modifier = Modifier.weight(1f)) {
                             OneLineText("-1d")
@@ -306,25 +283,17 @@ fun HomeScreen(
                     is TimelineItem.Block -> {
                         val b = item.block
                         val status = statusOfBlock(nowMin, b.startMinute, b.endMinute)
-                        val progress =
-                            if (status == BlockStatus.NOW) progressOfBlock(nowMin, b.startMinute, b.endMinute) else 0f
+                        val progress = if (status == BlockStatus.NOW) progressOfBlock(nowMin, b.startMinute, b.endMinute) else 0f
 
                         BlockCard(
                             block = b,
                             status = status,
                             progress = progress,
                             nowMin = nowMin,
-                            onClick = {
-                                selectedBlock = b
-                                showFeedbackSheet = true
-                            },
-                            onLongClick = {
-                                longPressedBlock = b
-                                showManageSheet = true
-                            }
+                            onClick = { selectedBlock = b; showFeedbackSheet = true },
+                            onLongClick = { longPressedBlock = b; showManageSheet = true }
                         )
                     }
-
                     is TimelineItem.Gap -> {
                         GapCard(
                             start = item.start,
@@ -346,12 +315,8 @@ fun HomeScreen(
             onDismissRequest = { askReset1 = false },
             title = { Text("전체 초기화") },
             text = { Text("모든 기록이 삭제됩니다.") },
-            confirmButton = {
-                Button(onClick = { askReset1 = false; askReset2 = true }) { Text("계속") }
-            },
-            dismissButton = {
-                OutlinedButton(onClick = { askReset1 = false }) { Text("취소") }
-            }
+            confirmButton = { Button(onClick = { askReset1 = false; askReset2 = true }) { Text("계속") } },
+            dismissButton = { OutlinedButton(onClick = { askReset1 = false }) { Text("취소") } }
         )
     }
     if (askReset2) {
@@ -359,12 +324,8 @@ fun HomeScreen(
             onDismissRequest = { askReset2 = false },
             title = { Text("정말 초기화할까요?") },
             text = { Text("되돌릴 수 없습니다.") },
-            confirmButton = {
-                Button(onClick = { askReset2 = false; ScheduleStore.resetAll() }) { Text("초기화") }
-            },
-            dismissButton = {
-                OutlinedButton(onClick = { askReset2 = false }) { Text("취소") }
-            }
+            confirmButton = { Button(onClick = { askReset2 = false; ScheduleStore.resetAll() }) { Text("초기화") } },
+            dismissButton = { OutlinedButton(onClick = { askReset2 = false }) { Text("취소") } }
         )
     }
 
@@ -418,18 +379,12 @@ fun HomeScreen(
                 Text("${b.title} (${formatRange(b.startMinute, b.endMinute)})")
 
                 Button(
-                    onClick = {
-                        showManageSheet = false
-                        showEditDialog = true
-                    },
+                    onClick = { showManageSheet = false; showEditDialog = true },
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("수정") }
 
                 OutlinedButton(
-                    onClick = {
-                        ScheduleStore.deleteTodayBlock(b.id)
-                        showManageSheet = false
-                    },
+                    onClick = { ScheduleStore.deleteTodayBlock(b.id); showManageSheet = false },
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("삭제") }
             }
@@ -483,11 +438,11 @@ private fun BlockCard(
         else -> ""
     }
 
-    // ✅ 남은 시간 문자열
     val remainText = if (status == BlockStatus.NOW) {
-        val remain = remainingMinutesOfBlock(nowMin, block.startMinute, block.endMinute)
-        formatRemain(remain)
+        formatRemain(remainingMinutesOfBlock(nowMin, block.startMinute, block.endMinute))
     } else ""
+
+    val frac = progress.coerceIn(0f, 1f)
 
     Card(
         modifier = Modifier
@@ -495,24 +450,21 @@ private fun BlockCard(
             .heightIn(min = ROW_MIN_HEIGHT)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
     ) {
-        // ✅ 폭을 "명시 계산"해서 진행 채움이 무조건 보이게 함
-        BoxWithConstraints(
+        // ✅ 레이아웃에 의존하지 않고, 실제 픽셀 폭으로 사각형을 직접 그림 → “안 차오름” 재발 방지
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(baseColor)
+                .drawBehind {
+                    if (status == BlockStatus.NOW && frac > 0f) {
+                        val w = size.width * frac
+                        drawRect(
+                            color = PastIvory,
+                            size = Size(w, size.height)
+                        )
+                    }
+                }
         ) {
-            if (status == BlockStatus.NOW) {
-                val fraction = progress.coerceIn(0f, 1f)
-                val filledWidth = maxWidth * fraction
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .width(filledWidth)
-                        .background(PastIvory)
-                )
-            }
-
             Row(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
 
                 if (status == BlockStatus.NOW) {
