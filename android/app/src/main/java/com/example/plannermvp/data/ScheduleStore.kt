@@ -514,6 +514,7 @@ object ScheduleStore {
         if (idx >= 0) {
             val old = todayBlocks[idx]
             todayBlocks[idx] = old.copy(feedbackTags = tags, feedbackMemo = memo)
+            recordFeedbackUsage(tags)
             persistDebounced()
         }
     }
@@ -555,12 +556,46 @@ object ScheduleStore {
     // ---------------------------
     // Feedback options
     // ---------------------------
-    fun feedbackOptionsFor(category: Category): List<String> {
-        return when (category) {
-            Category.SLEEP -> listOf("개운함", "숙면", "뒤척임", "늦잠", "수면부족")
-            Category.EXERCISE -> listOf("고강도", "유산소", "근력", "컨디션저하", "만족")
-            Category.STUDY -> listOf("집중", "산만", "진도OK", "막힘", "복습필요")
-            Category.ETC -> listOf("GOOD", "OKAY", "BAD", "FAIL")
+    private val commonCauseTags = listOf("시간부족", "과대계획", "변수발생", "집중안됨", "컨디션저하")
+    private val sleepSpecificTags = listOf("개운함", "수면부족", "중간각성", "늦잠")
+    private val exerciseSpecificTags = listOf("컨디션좋음", "운동강도높음", "운동강도낮음")
+    private val studySpecificTags = listOf("집중됨", "진도OK", "막힘")
+    private val feedbackUsageCounts = mutableMapOf<String, Int>()
+    private val keywordTagRules = listOf(
+        listOf("회의", "발표", "미팅") to "변수발생",
+        listOf("알바", "근무", "출근") to "시간부족",
+        listOf("이동", "통학", "통근") to "시간부족",
+        listOf("병원", "진료", "약속") to "변수발생",
+        listOf("공부", "과제", "리딩") to "집중안됨",
+        listOf("운동", "헬스", "러닝") to "컨디션저하"
+    )
+
+    fun feedbackOptionsFor(block: TimeBlock): List<String> {
+        val baseTags = when (block.category) {
+            Category.SLEEP -> sleepSpecificTags + commonCauseTags
+            Category.EXERCISE -> exerciseSpecificTags + commonCauseTags
+            Category.STUDY -> studySpecificTags + commonCauseTags
+            Category.ETC -> commonCauseTags
+        }
+        val prioritized = mutableListOf<String>()
+        val title = block.title
+        keywordTagRules.forEach { (keywords, tag) ->
+            if (keywords.any { title.contains(it, ignoreCase = true) } && baseTags.contains(tag)) {
+                prioritized.add(tag)
+            }
+        }
+        val frequentTags = baseTags
+            .sortedByDescending { feedbackUsageCounts[it] ?: 0 }
+            .filter { (feedbackUsageCounts[it] ?: 0) > 0 }
+        prioritized.addAll(frequentTags)
+        val uniquePrioritized = prioritized.distinct()
+        val remaining = baseTags.filterNot { uniquePrioritized.contains(it) }
+        return uniquePrioritized + remaining
+    }
+
+    private fun recordFeedbackUsage(tags: Set<String>) {
+        tags.forEach { tag ->
+            feedbackUsageCounts[tag] = (feedbackUsageCounts[tag] ?: 0) + 1
         }
     }
 }
