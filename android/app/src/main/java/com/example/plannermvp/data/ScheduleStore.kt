@@ -3,10 +3,9 @@ package com.example.plannermvp.data
 import android.content.Context
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
-import com.example.plannermvp.data.persistence.ScheduleDataStore
+import com.example.plannermvp.data.persistence.ScheduleRepository
 import com.example.plannermvp.data.persistence.ScheduleSnapshot
 import kotlinx.coroutines.*
-import java.time.LocalDate
 import java.time.LocalDateTime
 
 object ScheduleStore {
@@ -56,11 +55,13 @@ object ScheduleStore {
 
     private var snapshotBeforeDev: ScheduleSnapshot? = null
 
+    private var clock: ScheduleClock = SystemScheduleClock
+
     fun nowDateTime(): LocalDateTime {
         return if (!devMode) {
-            LocalDateTime.now()
+            clock.nowDateTime()
         } else {
-            val base = devBaseRealNow.value ?: LocalDateTime.now()
+            val base = devBaseRealNow.value ?: clock.nowDateTime()
             base.plusDays(devOffsetDays.value).plusMinutes(devOffsetMinutes.value)
         }
     }
@@ -74,7 +75,7 @@ object ScheduleStore {
         if (!devMode) {
             // dev ON: 현 상태 스냅샷 백업(저장 금지)
             snapshotBeforeDev = buildSnapshot(schemaVersion = 4)
-            devBaseRealNow.value = LocalDateTime.now()
+            devBaseRealNow.value = clock.nowDateTime()
             devOffsetMinutes.value = 0L
             devOffsetDays.value = 0L
             _devMode.value = true
@@ -114,17 +115,17 @@ object ScheduleStore {
         appContext = context.applicationContext
 
         ioScope.launch {
-            val snap = ScheduleDataStore.load(appContext!!)
+            val snap = ScheduleRepository.load(appContext!!)
             withContext(Dispatchers.Main) {
                 if (snap != null) {
                     applySnapshotToState(snap)
                     // lastActiveDateIso가 비어있으면 보정
                     if (_lastActiveDateIso.value.isBlank()) {
-                        _lastActiveDateIso.value = LocalDate.now().toString()
+                        _lastActiveDateIso.value = clock.todayIso()
                     }
                 } else {
                     seedIfNeeded()
-                    _lastActiveDateIso.value = LocalDate.now().toString()
+                    _lastActiveDateIso.value = clock.todayIso()
                     _pendingRollover.value = false
                     _pendingFromDateIso.value = ""
                 }
@@ -152,7 +153,7 @@ object ScheduleStore {
         saveJob?.cancel()
         saveJob = ioScope.launch {
             delay(600)
-            ScheduleDataStore.save(ctx, buildSnapshot(schemaVersion = 4))
+            ScheduleRepository.save(ctx, buildSnapshot(schemaVersion = 4))
         }
     }
 
@@ -244,7 +245,7 @@ object ScheduleStore {
         return if (_pendingRollover.value && _pendingFromDateIso.value.isNotBlank()) {
             _pendingFromDateIso.value
         } else {
-            LocalDate.now().toString()
+            clock.todayIso()
         }
     }
 
@@ -312,7 +313,7 @@ object ScheduleStore {
         if (devMode) return
         if (!loadedOnce) return
 
-        val todayIso = LocalDate.now().toString()
+        val todayIso = clock.todayIso()
         if (_lastActiveDateIso.value.isBlank()) {
             _lastActiveDateIso.value = todayIso
             persistDebounced()
@@ -366,7 +367,7 @@ object ScheduleStore {
 
         _pendingRollover.value = false
         _pendingFromDateIso.value = ""
-        _lastActiveDateIso.value = LocalDate.now().toString()
+        _lastActiveDateIso.value = clock.todayIso()
 
         persistDebounced()
     }
@@ -400,11 +401,11 @@ object ScheduleStore {
 
         _pendingRollover.value = false
         _pendingFromDateIso.value = ""
-        _lastActiveDateIso.value = LocalDate.now().toString()
+        _lastActiveDateIso.value = clock.todayIso()
 
         if (ctx != null) {
             ioScope.launch {
-                runCatching { ScheduleDataStore.clearAll(ctx) }
+                runCatching { ScheduleRepository.clearAll(ctx) }
             }
         }
 
@@ -426,7 +427,7 @@ object ScheduleStore {
         if (_pendingRollover.value) {
             _pendingRollover.value = false
             _pendingFromDateIso.value = ""
-            _lastActiveDateIso.value = LocalDate.now().toString()
+            _lastActiveDateIso.value = clock.todayIso()
         }
 
         persistDebounced()
@@ -446,47 +447,48 @@ object ScheduleStore {
 
             _pendingRollover.value = false
             _pendingFromDateIso.value = ""
-            _lastActiveDateIso.value = LocalDate.now().toString()
+            _lastActiveDateIso.value = clock.todayIso()
         } finally {
             isAdvancing = false
         }
         persistDebounced()
     }
 
-    // ---------------------------
-    // Overlap validation (자정 넘김 지원)
-    // ---------------------------
-    private fun overlaps(aStart: Int, aEnd: Int, bStart: Int, bEnd: Int): Boolean {
-        return maxOf(aStart, bStart) < minOf(aEnd, bEnd)
+    fun setClockForTesting(testClock: ScheduleClock) {
+        clock = testClock
     }
 
-    private fun splitIntervals(start: Int, end: Int): List<Pair<Int, Int>> {
-        if (end <= start) return emptyList()
-        if (end <= DAY_MIN) return listOf(start to end)
-        val endNext = end % DAY_MIN
-        return listOf(start to DAY_MIN, 0 to endNext)
+    fun resetClockForTesting() {
+        clock = SystemScheduleClock
     }
 
-    private fun canPlace(list: List<TimeBlock>, ignoreId: String?, startMinute: Int, endMinute: Int): Boolean {
-        if (endMinute <= startMinute) return false
-        val aParts = splitIntervals(startMinute, endMinute)
-        if (aParts.isEmpty()) return false
+    fun resetForTesting() {
+        todayBlocks.clear()
+        yesterdayBlocks.clear()
+        tomorrowBlocks.clear()
+        historyDays.clear()
+        _pendingRollover.value = false
+        _pendingFromDateIso.value = ""
+        _lastActiveDateIso.value = ""
+        loadedOnce = true
+        seededOnce = false
+        isAdvancing = false
+        snapshotBeforeDev = null
+        devBaseRealNow.value = null
+        devOffsetMinutes.value = 0L
+        devOffsetDays.value = 0L
+        _devMode.value = false
+    }
 
-        for (b in list) {
-            if (ignoreId != null && b.id == ignoreId) continue
-            val bParts = splitIntervals(b.startMinute, b.endMinute)
-            for (ap in aParts) for (bp in bParts) {
-                if (overlaps(ap.first, ap.second, bp.first, bp.second)) return false
-            }
-        }
-        return true
+    fun setLastActiveDateForTesting(dateIso: String) {
+        _lastActiveDateIso.value = dateIso
     }
 
     // ---------------------------
     // Today CRUD
     // ---------------------------
     fun addTodayBlock(title: String, startMinute: Int, endMinute: Int, category: Category): Boolean {
-        if (!canPlace(todayBlocks, null, startMinute, endMinute)) return false
+        if (!ScheduleValidator.canPlace(todayBlocks, null, startMinute, endMinute)) return false
         todayBlocks.add(TimeBlock(title = title, startMinute = startMinute, endMinute = endMinute, category = category))
         persistDebounced()
         return true
@@ -495,7 +497,7 @@ object ScheduleStore {
     fun updateTodayBlock(id: String, title: String, startMinute: Int, endMinute: Int, category: Category): Boolean {
         val idx = todayBlocks.indexOfFirst { it.id == id }
         if (idx < 0) return false
-        if (!canPlace(todayBlocks, id, startMinute, endMinute)) return false
+        if (!ScheduleValidator.canPlace(todayBlocks, id, startMinute, endMinute)) return false
         val old = todayBlocks[idx]
         todayBlocks[idx] = old.copy(title = title, startMinute = startMinute, endMinute = endMinute, category = category)
         persistDebounced()
@@ -529,7 +531,7 @@ object ScheduleStore {
     // Tomorrow CRUD
     // ---------------------------
     fun addTomorrowBlock(title: String, startMinute: Int, endMinute: Int, category: Category): Boolean {
-        if (!canPlace(tomorrowBlocks, null, startMinute, endMinute)) return false
+        if (!ScheduleValidator.canPlace(tomorrowBlocks, null, startMinute, endMinute)) return false
         tomorrowBlocks.add(TimeBlock(title = title, startMinute = startMinute, endMinute = endMinute, category = category))
         persistDebounced()
         return true
@@ -538,7 +540,7 @@ object ScheduleStore {
     fun updateTomorrowBlock(id: String, title: String, startMinute: Int, endMinute: Int, category: Category): Boolean {
         val idx = tomorrowBlocks.indexOfFirst { it.id == id }
         if (idx < 0) return false
-        if (!canPlace(tomorrowBlocks, id, startMinute, endMinute)) return false
+        if (!ScheduleValidator.canPlace(tomorrowBlocks, id, startMinute, endMinute)) return false
         val old = tomorrowBlocks[idx]
         tomorrowBlocks[idx] = old.copy(title = title, startMinute = startMinute, endMinute = endMinute, category = category)
         persistDebounced()

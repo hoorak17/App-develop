@@ -15,17 +15,17 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.example.plannermvp.data.ScheduleStore
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.plannermvp.data.formatRange
 
 @Composable
 fun SummaryScreen(
     onBack: () -> Unit,
-    onGoPlan: () -> Unit
+    onGoPlan: () -> Unit,
+    viewModel: SummaryViewModel = viewModel()
 ) {
-    val blocks = ScheduleStore.todayBlocks.sortedBy { it.startMinute }
-    val total = blocks.size
-    val reviewed = blocks.count { it.feedbackTags.isNotEmpty() || it.feedbackMemo.isNotBlank() }
+    val blocks = viewModel.todayBlocks.sortedBy { it.startMinute }
+    val (total, reviewed) = viewModel.summaryCounts(blocks)
 
     var showForceCloseConfirm by remember { mutableStateOf(false) }
 
@@ -40,7 +40,7 @@ fun SummaryScreen(
             OutlinedButton(onClick = onBack) { Text("뒤로") }
 
             Button(onClick = {
-                ScheduleStore.preparePlanningNextDay()
+                viewModel.preparePlanningNextDay()
                 onGoPlan()
             }) { Text("내일 계획 세우기") }
         }
@@ -75,9 +75,9 @@ fun SummaryScreen(
             text = { Text("오늘을 종료하고 다음 날로 넘깁니다. 진행하시겠습니까?") },
             confirmButton = {
                 Button(onClick = {
-                    val res = ScheduleStore.manualForceCloseToday()
+                    val requiresPlan = viewModel.manualForceCloseTodayRequiresPlan()
                     showForceCloseConfirm = false
-                    if (res is ScheduleStore.RolloverResult.RequirePlan) onGoPlan()
+                    if (requiresPlan) onGoPlan()
                 }) { Text("종료") }
             },
             dismissButton = {

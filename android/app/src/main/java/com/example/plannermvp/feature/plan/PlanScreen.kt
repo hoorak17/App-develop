@@ -18,8 +18,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.plannermvp.data.Category
-import com.example.plannermvp.data.ScheduleStore
 import com.example.plannermvp.data.TimeBlock
 import com.example.plannermvp.data.formatRange
 
@@ -33,7 +33,8 @@ private enum class AddSourceTab { YESTERDAY, NEW, LOAD }
 @Composable
 fun PlanScreen(
     onDone: () -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    viewModel: PlanViewModel = viewModel()
 ) {
     var showDialog by remember { mutableStateOf(false) }
     var dialogMode by remember { mutableStateOf<DialogMode>(DialogMode.AddNew) }
@@ -41,11 +42,11 @@ fun PlanScreen(
     // ✅ 탭 순서/용어 = 어제일정 / 신규일정 / 불러오기
     var tab by remember { mutableStateOf(AddSourceTab.YESTERDAY) }
 
-    val yesterday = ScheduleStore.yesterdayBlocks.toList()
-    val tomorrow = ScheduleStore.tomorrowBlocks.sortedBy { it.startMinute }
+    val yesterday = viewModel.yesterdayBlocks.toList()
+    val tomorrow = viewModel.tomorrowBlocks.sortedBy { it.startMinute }
 
     // ✅ 히스토리: remember로 굳히지 말고 매번 최신 상태 반영
-    val historyDates = ScheduleStore.historyDayList(limit = 14)
+    val historyDates = viewModel.historyDayList(limit = 14)
     var selectedHistoryDate by remember { mutableStateOf<String?>(null) }
 
     // ✅ 목록 변화 시 선택값 보정
@@ -60,7 +61,7 @@ fun PlanScreen(
 
     val historyBlocks =
         if (selectedHistoryDate == null) emptyList()
-        else ScheduleStore.blocksOfHistoryDay(selectedHistoryDate!!)
+        else viewModel.blocksOfHistoryDay(selectedHistoryDate!!)
 
     // 즉시 추가 실패 메시지(겹침 등)
     var quickAddError by remember { mutableStateOf("") }
@@ -79,7 +80,7 @@ fun PlanScreen(
             }
             Button(
                 onClick = {
-                    ScheduleStore.finalizeTomorrowToToday()
+                    viewModel.finalizeTomorrowToToday()
                     onDone()
                 },
                 modifier = Modifier.weight(1f)
@@ -133,7 +134,7 @@ fun PlanScreen(
                                         OutlinedButton(
                                             onClick = {
                                                 quickAddError = ""
-                                                val ok = ScheduleStore.addTomorrowBlock(
+                                                val ok = viewModel.addTomorrowBlock(
                                                     title = b.title,
                                                     startMinute = b.startMinute,
                                                     endMinute = b.endMinute,
@@ -196,7 +197,7 @@ fun PlanScreen(
                                             OutlinedButton(
                                                 onClick = {
                                                     quickAddError = ""
-                                                    val ok = ScheduleStore.addTomorrowBlock(
+                                                    val ok = viewModel.addTomorrowBlock(
                                                         title = b.title,
                                                         startMinute = b.startMinute,
                                                         endMinute = b.endMinute,
@@ -251,7 +252,7 @@ fun PlanScreen(
                             ) { Text("수정") }
 
                             OutlinedButton(
-                                onClick = { ScheduleStore.deleteTomorrowBlock(b.id) },
+                                onClick = { viewModel.deleteTomorrowBlock(b.id) },
                                 modifier = Modifier.weight(1f)
                             ) { Text("삭제") }
                         }
@@ -282,7 +283,7 @@ fun PlanScreen(
             onTrySave = { t, s, e ->
                 when (val m = dialogMode) {
                     DialogMode.AddNew -> {
-                        ScheduleStore.addTomorrowBlock(
+                        viewModel.addTomorrowBlock(
                             title = t,
                             startMinute = s,
                             endMinute = e,
@@ -290,7 +291,7 @@ fun PlanScreen(
                         )
                     }
                     is DialogMode.EditTomorrow -> {
-                        ScheduleStore.updateTomorrowBlock(
+                        viewModel.updateTomorrowBlock(
                             id = m.target.id,
                             title = t,
                             startMinute = s,
