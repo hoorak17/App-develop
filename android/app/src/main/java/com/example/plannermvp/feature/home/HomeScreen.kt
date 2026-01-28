@@ -356,7 +356,7 @@ fun HomeScreen(
             val latest = viewModel.latestBlock(selectedBlock!!.id) ?: selectedBlock!!
             FeedbackSheet(
                 block = latest,
-                options = viewModel.feedbackOptionsFor(latest.category),
+                options = viewModel.feedbackOptionsFor(latest),
                 onSave = { tags, memo ->
                     viewModel.updateTodayFeedback(latest.id, tags, memo)
                     showFeedbackSheet = false

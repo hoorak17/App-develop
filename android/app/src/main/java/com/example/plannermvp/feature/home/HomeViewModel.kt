@@ -40,8 +40,8 @@ class HomeViewModel : ViewModel() {
 
     fun clearTodayFeedback(id: String) = ScheduleStore.clearTodayFeedback(id)
 
-    fun feedbackOptionsFor(category: Category): List<String> {
-        return ScheduleStore.feedbackOptionsFor(category)
+    fun feedbackOptionsFor(block: TimeBlock): List<String> {
+        return ScheduleStore.feedbackOptionsFor(block)
     }
 
     fun latestBlock(id: String): TimeBlock? {
